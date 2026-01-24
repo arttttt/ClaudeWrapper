@@ -17,6 +17,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut cmd = CommandBuilder::new(command);
     cmd.args(args);
+    cmd.cwd(std::env::current_dir()?);
 
     let mut child = pair.slave.spawn_command(cmd)?;
     drop(pair.slave);
