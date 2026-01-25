@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-portable-pty = "0.8"
+ratatui = "0.26"
 termwiz = "0.22"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util"] }
-crossterm = "0.27"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+hyper = "1.2"
+toml = "0.8"
