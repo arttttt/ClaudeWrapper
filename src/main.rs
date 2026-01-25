@@ -1,7 +1,7 @@
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size as terminal_size};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::error::Error;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::thread;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -37,8 +37,34 @@ fn main() -> Result<(), Box<dyn Error>> {
     let _writer_handle = thread::spawn(move || {
         let mut stdin = io::stdin();
         let mut writer = writer;
-        let _ = io::copy(&mut stdin, &mut writer);
-        let _ = writer.flush();
+        let mut buffer = [0u8; 1024];
+
+        loop {
+            let read_bytes = match stdin.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => count,
+                Err(_) => break,
+            };
+
+            let mut filtered = Vec::with_capacity(read_bytes);
+            for &byte in &buffer[..read_bytes] {
+                if is_wrapper_hotkey(byte) {
+                    continue;
+                }
+                filtered.push(byte);
+            }
+
+            if filtered.is_empty() {
+                continue;
+            }
+
+            if writer.write_all(&filtered).is_err() {
+                break;
+            }
+            if writer.flush().is_err() {
+                break;
+            }
+        }
     });
 
     let status = child.wait()?;
@@ -50,6 +76,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     std::process::exit(status.exit_code() as i32);
+}
+
+fn is_wrapper_hotkey(byte: u8) -> bool {
+    byte == 0x02 || byte == 0x13 || byte == 0x11
 }
 
 fn parse_command() -> (String, Vec<String>) {
