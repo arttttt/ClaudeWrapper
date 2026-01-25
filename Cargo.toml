@@ -8,6 +8,7 @@ edition = "2021"
 portable-pty = "0.8"
 termwiz = "0.22"
 crossterm = "0.27"
+signal-hook = "0.3"
 
 # TUI
 ratatui = "0.26"
