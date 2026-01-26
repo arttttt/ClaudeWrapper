@@ -1,9 +1,9 @@
-use crate::ui::app::App;
+use crate::ui::app::{App, PopupKind};
 use crate::ui::footer::Footer;
 use crate::ui::header::Header;
 use crate::ui::layout::{centered_rect, layout_regions};
 use crate::ui::terminal::TerminalBody;
-use ratatui::widgets::{Block, Borders, Clear};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use std::sync::Arc;
 use termwiz::surface::CursorVisibility;
@@ -17,7 +17,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(Clear, body);
     if let Some(screen) = app.screen() {
         frame.render_widget(TerminalBody::new(Arc::clone(&screen)), body);
-        if body.width > 0 && body.height > 0 {
+        if app.focus_is_terminal() && body.width > 0 && body.height > 0 {
             if let Ok(screen) = screen.lock() {
                 if screen.cursor_visibility() == CursorVisibility::Visible {
                     let (x, y) = screen.cursor_position();
@@ -31,8 +31,25 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let footer_widget = Footer::new();
     frame.render_widget(footer_widget.widget(), footer);
 
-    if app.show_popup() {
-        let popup = Block::default().title("Popup").borders(Borders::ALL);
-        frame.render_widget(popup, centered_rect(60, 30, frame.size()));
+    if let Some(kind) = app.popup_kind() {
+        let area = centered_rect(60, 30, frame.size());
+        frame.render_widget(Clear, area);
+        let title = match kind {
+            PopupKind::BackendSwitch => "Switch Backend",
+            PopupKind::Status => "Status",
+        };
+        let popup = Block::default().title(title).borders(Borders::ALL);
+        match kind {
+            PopupKind::Status => {
+                let message = app
+                    .status_message()
+                    .unwrap_or("Status view not implemented.");
+                let widget = Paragraph::new(message).block(popup);
+                frame.render_widget(widget, area);
+            }
+            PopupKind::BackendSwitch => {
+                frame.render_widget(popup, area);
+            }
+        }
     }
 }

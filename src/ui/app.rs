@@ -4,11 +4,23 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use termwiz::surface::Surface;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PopupKind {
+    BackendSwitch,
+    Status,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Focus {
+    Terminal,
+    Popup(PopupKind),
+}
+
 pub struct App {
     should_quit: bool,
     tick_rate: Duration,
     last_tick: Instant,
-    show_popup: bool,
+    focus: Focus,
     status_message: Option<String>,
     size: Option<(u16, u16)>,
     pty: Option<PtyHandle>,
@@ -20,7 +32,7 @@ impl App {
             should_quit: false,
             tick_rate,
             last_tick: Instant::now(),
-            show_popup: false,
+            focus: Focus::Terminal,
             status_message: None,
             size: None,
             pty: None,
@@ -36,7 +48,29 @@ impl App {
     }
 
     pub fn show_popup(&self) -> bool {
-        self.show_popup
+        matches!(self.focus, Focus::Popup(_))
+    }
+
+    pub fn popup_kind(&self) -> Option<PopupKind> {
+        match self.focus {
+            Focus::Popup(kind) => Some(kind),
+            Focus::Terminal => None,
+        }
+    }
+
+    pub fn focus_is_terminal(&self) -> bool {
+        self.focus == Focus::Terminal
+    }
+
+    pub fn toggle_popup(&mut self, kind: PopupKind) {
+        self.focus = match self.focus {
+            Focus::Popup(active) if active == kind => Focus::Terminal,
+            _ => Focus::Popup(kind),
+        };
+    }
+
+    pub fn close_popup(&mut self) {
+        self.focus = Focus::Terminal;
     }
 
     pub fn on_tick(&mut self) {
