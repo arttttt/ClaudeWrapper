@@ -7,6 +7,7 @@ pub mod theme;
 
 use crate::ui::app::App;
 use crate::ui::events::{AppEvent, EventHandler};
+use crate::ui::footer::Footer;
 use crate::ui::header::Header;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -83,10 +84,8 @@ fn draw(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(header_widget.widget(), header);
     frame.render_widget(Clear, body);
     frame.render_widget(Block::default().title("Body").borders(Borders::ALL), body);
-    frame.render_widget(
-        Block::default().title("Footer").borders(Borders::ALL),
-        footer,
-    );
+    let footer_widget = Footer::new();
+    frame.render_widget(footer_widget.widget(), footer);
 
     if app.show_popup() {
         let popup = Block::default().title("Popup").borders(Borders::ALL);
