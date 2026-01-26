@@ -9,11 +9,13 @@ use crate::ui::app::App;
 use crate::ui::events::{AppEvent, EventHandler};
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{KeyCode, KeyEvent};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::widgets::{Block, Borders};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::widgets::{Block, Borders, Clear};
 use ratatui::{Frame, Terminal};
 use std::io;
 use std::io::Stdout;
@@ -54,18 +56,38 @@ fn handle_key(app: &mut App, key: KeyEvent) {
 }
 
 fn draw(frame: &mut Frame<'_>, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(1),
-            Constraint::Length(3),
-        ])
-        .split(frame.size());
+    let area = frame.size();
+    let header_height = 3.min(area.height);
+    let footer_height = 3.min(area.height.saturating_sub(header_height));
+    let header = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: header_height,
+    };
+    let footer = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(footer_height),
+        width: area.width,
+        height: footer_height,
+    };
+    let body = Rect {
+        x: area.x,
+        y: area.y + header_height,
+        width: area.width,
+        height: area.height.saturating_sub(header_height + footer_height),
+    };
 
-    frame.render_widget(Block::default().title("Header").borders(Borders::ALL), chunks[0]);
-    frame.render_widget(Block::default().title("Body").borders(Borders::ALL), chunks[1]);
-    frame.render_widget(Block::default().title("Footer").borders(Borders::ALL), chunks[2]);
+    frame.render_widget(
+        Block::default().title("Header").borders(Borders::ALL),
+        header,
+    );
+    frame.render_widget(Clear, body);
+    frame.render_widget(Block::default().title("Body").borders(Borders::ALL), body);
+    frame.render_widget(
+        Block::default().title("Footer").borders(Borders::ALL),
+        footer,
+    );
 
     if app.show_popup() {
         let popup = Block::default().title("Popup").borders(Borders::ALL);
@@ -73,7 +95,11 @@ fn draw(frame: &mut Frame<'_>, app: &App) {
     }
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+fn centered_rect(
+    percent_x: u16,
+    percent_y: u16,
+    area: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
