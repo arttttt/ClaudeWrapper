@@ -1,8 +1,5 @@
-use claudewrapper::pty::{parse_command, PtyManager};
-use std::error::Error;
+use std::io;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let (command, args) = parse_command();
-    let mut pty_manager = PtyManager::new();
-    pty_manager.run_command(command, args)
+fn main() -> io::Result<()> {
+    claudewrapper::ui::run()
 }
