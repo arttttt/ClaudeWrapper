@@ -15,15 +15,15 @@ use crate::ui::terminal::TerminalBody;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, Clear as TermClear, ClearType, EnterAlternateScreen,
+    LeaveAlternateScreen,
 };
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Block, Borders, Clear};
 use ratatui::{Frame, Terminal};
-use std::io;
-use std::io::Stdout;
+use std::io::{self, Stdout, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use termwiz::surface::CursorVisibility;
@@ -105,8 +105,6 @@ fn draw(frame: &mut Frame<'_>, app: &App) {
                 }
             }
         }
-    } else {
-        frame.render_widget(Block::default().title("Body").borders(Borders::ALL), body);
     }
     let footer_widget = Footer::new();
     frame.render_widget(footer_widget.widget(), footer);
@@ -218,6 +216,9 @@ fn setup_terminal() -> io::Result<(Terminal<CrosstermBackend<Stdout>>, TerminalG
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
+    stdout.execute(TermClear(ClearType::All))?;
+    stdout.write_all(b"\x1b[3J")?;
+    stdout.flush()?;
     stdout.execute(Hide)?;
 
     let backend = CrosstermBackend::new(stdout);

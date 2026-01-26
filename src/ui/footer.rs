@@ -10,7 +10,7 @@ pub struct Footer {
 
 impl Footer {
     pub fn new() -> Self {
-        let hint = Line::from("Ctrl+B: Switch │ Ctrl+S: Status │ Ctrl+Q: Quit");
+        let hint = Line::from(" Ctrl+B: Switch │ Ctrl+S: Status │ Ctrl+Q: Quit");
         Self { hint }
     }
 
@@ -22,6 +22,6 @@ impl Footer {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(GLOBAL_BORDER)),
             )
-            .alignment(Alignment::Center)
+            .alignment(Alignment::Left)
     }
 }

@@ -15,11 +15,13 @@ impl Header {
         let separator_style = Style::default().fg(HEADER_SEPARATOR);
         let status_style = Style::default().fg(STATUS_OK);
         let line = Line::from(vec![
-            Span::styled("🟢 ", status_style),
+            Span::styled("  ", text_style),
+            Span::styled("🟢", status_style),
+            Span::styled("  ", text_style),
             Span::styled("Backend", text_style),
-            Span::styled(" │ ", separator_style),
+            Span::styled("  │  ", separator_style),
             Span::styled("model", text_style),
-            Span::styled(" │ ", separator_style),
+            Span::styled("  │  ", separator_style),
             Span::styled("tokens", text_style),
         ]);
 
