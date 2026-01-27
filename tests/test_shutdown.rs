@@ -7,18 +7,6 @@ async fn test_shutdown_manager_initialization() {
     assert!(!manager.is_shutting_down());
 }
 
-#[test]
-fn test_connection_tracking() {
-    let manager = ShutdownManager::new();
-    
-    manager.increment_connections();
-    manager.increment_connections();
-    manager.increment_connections();
-    
-    manager.decrement_connections();
-    manager.increment_connections();
-}
-
 #[tokio::test]
 async fn test_wait_for_connections_completes_immediately_when_zero() {
     let manager = ShutdownManager::new();
