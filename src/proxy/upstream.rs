@@ -6,3 +6,9 @@ impl UpstreamPool {
         todo!("implement upstream pool")
     }
 }
+
+impl Default for UpstreamPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}

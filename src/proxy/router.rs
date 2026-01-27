@@ -1,8 +1,37 @@
-pub struct RouterEngine;
+use hyper::{Request, Response, Method, StatusCode};
+use hyper::body::Incoming;
+use hyper::body::Bytes;
+use std::sync::Arc;
+
+use crate::proxy::health::HealthHandler;
+
+#[derive(Clone)]
+pub struct RouterEngine {
+    health: Arc<HealthHandler>,
+}
 
 impl RouterEngine {
     pub fn new() -> Self {
-        // TODO: Track active backend and routing policy.
-        todo!("implement router engine")
+        Self {
+            health: Arc::new(HealthHandler::new()),
+        }
+    }
+
+    pub async fn route(&self, req: Request<Incoming>) -> Result<Response<Bytes>, hyper::Error> {
+        let path = req.uri().path();
+
+        match (req.method(), path) {
+            (&Method::GET, "/health") => self.health.handle().await,
+            _ => Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Bytes::copy_from_slice(b"Not Found"))
+                .unwrap()),
+        }
+    }
+}
+
+impl Default for RouterEngine {
+    fn default() -> Self {
+        Self::new()
     }
 }
