@@ -1,7 +1,7 @@
 use hyper::{Request, Response};
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{HOST, CONTENT_TYPE};
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use http_body_util::{BodyExt, Full, combinators::UnsyncBoxBody};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
@@ -23,7 +23,7 @@ impl UpstreamClient {
         }
     }
 
-    pub async fn forward(&self, req: Request<Incoming>) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
+    pub async fn forward(&self, req: Request<Incoming>) -> Result<Response<UnsyncBoxBody<Bytes, hyper::Error>>> {
         let method = req.method().clone();
         let uri = req.uri();
         let path_and_query = uri.path_and_query()
@@ -61,10 +61,14 @@ impl UpstreamClient {
         }
 
         if is_streaming {
-            Ok(builder.body(upstream_resp.into_body().boxed())?)
+            Ok(builder.body(upstream_resp.into_body().boxed_unsync())?)
         } else {
             let body_bytes = upstream_resp.into_body().collect().await?.to_bytes();
-            Ok(builder.body(Full::new(body_bytes).map_err(|e| match e {}).boxed())?)
+            Ok(builder.body(
+                Full::new(body_bytes)
+                    .map_err(|_| -> hyper::Error { unreachable!() })
+                    .boxed_unsync()
+            )?)
         }
     }
 }
