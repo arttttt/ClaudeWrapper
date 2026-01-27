@@ -14,6 +14,7 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
+use crate::config::ConfigStore;
 use crate::proxy::router::RouterEngine;
 use crate::proxy::shutdown::ShutdownManager;
 
@@ -36,11 +37,12 @@ pub struct ProxyServer {
 }
 
 impl ProxyServer {
-    pub fn new() -> Self {
+    pub fn new(config: ConfigStore) -> Self {
         let addr = "127.0.0.1:8080".parse().expect("Invalid bind address");
+        let router = RouterEngine::new(config);
         Self {
             addr,
-            router: RouterEngine::new(),
+            router,
             shutdown: Arc::new(ShutdownManager::new()),
         }
     }
@@ -98,11 +100,5 @@ impl ProxyServer {
         tracing::info!("Shutting down gracefully");
 
         Ok(())
-    }
-}
-
-impl Default for ProxyServer {
-    fn default() -> Self {
-        Self::new()
     }
 }

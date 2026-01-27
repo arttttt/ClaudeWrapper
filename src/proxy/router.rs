@@ -5,6 +5,7 @@ use http_body_util::combinators::UnsyncBoxBody;
 use std::sync::Arc;
 use anyhow::Result;
 
+use crate::config::ConfigStore;
 use crate::proxy::health::HealthHandler;
 use crate::proxy::upstream::UpstreamClient;
 
@@ -12,13 +13,15 @@ use crate::proxy::upstream::UpstreamClient;
 pub struct RouterEngine {
     health: Arc<HealthHandler>,
     upstream: Arc<UpstreamClient>,
+    config: ConfigStore,
 }
 
 impl RouterEngine {
-    pub fn new() -> Self {
+    pub fn new(config: ConfigStore) -> Self {
         Self {
             health: Arc::new(HealthHandler::new()),
             upstream: Arc::new(UpstreamClient::new()),
+            config,
         }
     }
 
@@ -28,13 +31,7 @@ impl RouterEngine {
 
         match (req.method(), path) {
             (&Method::GET, "/health") => self.health.handle().await,
-            _ => self.upstream.forward(req).await,
+            _ => self.upstream.forward(req, self.config.get()).await,
         }
-    }
-}
-
-impl Default for RouterEngine {
-    fn default() -> Self {
-        Self::new()
     }
 }
