@@ -1,4 +1,6 @@
-use claudewrapper::config::{Backend, Config, ConfigError, Defaults};
+use claudewrapper::config::{
+    build_auth_header, AuthType, Backend, Config, ConfigError, CredentialStatus, Defaults,
+};
 
 /// Test that Config::default() produces the expected values per spec.
 #[test]
@@ -16,7 +18,7 @@ fn test_config_default_values() {
     assert_eq!(backend.name, "claude");
     assert_eq!(backend.display_name, "Claude");
     assert_eq!(backend.base_url, "https://api.anthropic.com");
-    assert_eq!(backend.auth_type, "api_key");
+    assert_eq!(backend.auth_type(), AuthType::ApiKey);
     assert_eq!(backend.auth_env_var, "ANTHROPIC_API_KEY");
     assert_eq!(backend.models, vec!["claude-sonnet-4-20250514"]);
 }
@@ -28,11 +30,15 @@ fn test_config_path_ends_with_expected() {
     assert!(path.ends_with("claude-wrapper/config.toml"));
 }
 
-/// Test validation passes for default config.
+/// Test validation passes for default config when env var is set.
 #[test]
 fn test_validation_passes_for_default() {
+    // Set env var so the default backend is configured
+    std::env::set_var("ANTHROPIC_API_KEY", "test-key");
     let config = Config::default();
-    assert!(config.validate().is_ok());
+    let result = config.validate();
+    std::env::remove_var("ANTHROPIC_API_KEY");
+    assert!(result.is_ok());
 }
 
 /// Test validation fails when no backends are configured.
@@ -125,4 +131,192 @@ fn test_config_roundtrip() {
     );
     assert_eq!(original.backends.len(), deserialized.backends.len());
     assert_eq!(original.backends[0].name, deserialized.backends[0].name);
+}
+
+// ============================================================================
+// Environment Variable Resolution Tests
+// ============================================================================
+
+/// Test that backend is_configured returns true when env var is set.
+#[test]
+fn test_backend_is_configured_with_env_var() {
+    let env_var = "TEST_CONFIGURED_API_KEY";
+    std::env::set_var(env_var, "test-key-value");
+
+    let backend = Backend {
+        name: "test".to_string(),
+        display_name: "Test".to_string(),
+        base_url: "https://example.com".to_string(),
+        auth_type_str: "api_key".to_string(),
+        auth_env_var: env_var.to_string(),
+        models: vec![],
+    };
+
+    assert!(backend.is_configured());
+
+    std::env::remove_var(env_var);
+}
+
+/// Test that backend is_configured returns false when env var is missing.
+#[test]
+fn test_backend_not_configured_without_env_var() {
+    let backend = Backend {
+        name: "test".to_string(),
+        display_name: "Test".to_string(),
+        base_url: "https://example.com".to_string(),
+        auth_type_str: "api_key".to_string(),
+        auth_env_var: "NONEXISTENT_ENV_VAR_XYZ".to_string(),
+        models: vec![],
+    };
+
+    assert!(!backend.is_configured());
+}
+
+/// Test that backend with auth_type "none" is always configured.
+#[test]
+fn test_backend_no_auth_always_configured() {
+    let backend = Backend {
+        name: "test".to_string(),
+        display_name: "Test".to_string(),
+        base_url: "https://example.com".to_string(),
+        auth_type_str: "none".to_string(),
+        auth_env_var: "".to_string(),
+        models: vec![],
+    };
+
+    assert!(backend.is_configured());
+    assert!(matches!(
+        backend.resolve_credential(),
+        CredentialStatus::NoAuth
+    ));
+}
+
+/// Test build_auth_header creates correct x-api-key header.
+#[test]
+fn test_build_auth_header_api_key() {
+    let env_var = "TEST_AUTH_HEADER_API_KEY";
+    std::env::set_var(env_var, "my-secret-key");
+
+    let backend = Backend {
+        name: "test".to_string(),
+        display_name: "Test".to_string(),
+        base_url: "https://example.com".to_string(),
+        auth_type_str: "api_key".to_string(),
+        auth_env_var: env_var.to_string(),
+        models: vec![],
+    };
+
+    let header = build_auth_header(&backend);
+    assert!(header.is_some());
+
+    let (name, value) = header.unwrap();
+    assert_eq!(name, "x-api-key");
+    assert_eq!(value, "my-secret-key");
+
+    std::env::remove_var(env_var);
+}
+
+/// Test build_auth_header creates correct Bearer header.
+#[test]
+fn test_build_auth_header_bearer() {
+    let env_var = "TEST_AUTH_HEADER_BEARER";
+    std::env::set_var(env_var, "my-bearer-token");
+
+    let backend = Backend {
+        name: "test".to_string(),
+        display_name: "Test".to_string(),
+        base_url: "https://example.com".to_string(),
+        auth_type_str: "bearer".to_string(),
+        auth_env_var: env_var.to_string(),
+        models: vec![],
+    };
+
+    let header = build_auth_header(&backend);
+    assert!(header.is_some());
+
+    let (name, value) = header.unwrap();
+    assert_eq!(name, "Authorization");
+    assert_eq!(value, "Bearer my-bearer-token");
+
+    std::env::remove_var(env_var);
+}
+
+/// Test validation fails when active backend is unconfigured.
+#[test]
+fn test_validation_fails_unconfigured_active_backend() {
+    let config = Config {
+        defaults: Defaults {
+            active: "unconfigured".to_string(),
+            timeout_seconds: 30,
+        },
+        backends: vec![Backend {
+            name: "unconfigured".to_string(),
+            display_name: "Unconfigured".to_string(),
+            base_url: "https://example.com".to_string(),
+            auth_type_str: "api_key".to_string(),
+            auth_env_var: "NONEXISTENT_VAR_ABC123".to_string(),
+            models: vec![],
+        }],
+    };
+
+    let result = config.validate();
+    assert!(result.is_err());
+
+    match result.unwrap_err() {
+        ConfigError::ValidationError { message } => {
+            assert!(message.contains("not configured"));
+            assert!(message.contains("NONEXISTENT_VAR_ABC123"));
+        }
+        _ => panic!("Expected ValidationError"),
+    }
+}
+
+/// Test configured_backends only returns backends with valid credentials.
+#[test]
+fn test_configured_backends_filters_correctly() {
+    let env_var = "TEST_CONFIGURED_FILTER";
+    std::env::set_var(env_var, "test-key");
+
+    let config = Config {
+        defaults: Defaults {
+            active: "configured".to_string(),
+            timeout_seconds: 30,
+        },
+        backends: vec![
+            Backend {
+                name: "configured".to_string(),
+                display_name: "Configured".to_string(),
+                base_url: "https://example.com".to_string(),
+                auth_type_str: "api_key".to_string(),
+                auth_env_var: env_var.to_string(),
+                models: vec![],
+            },
+            Backend {
+                name: "unconfigured".to_string(),
+                display_name: "Unconfigured".to_string(),
+                base_url: "https://example.com".to_string(),
+                auth_type_str: "api_key".to_string(),
+                auth_env_var: "NONEXISTENT_VAR_XYZ789".to_string(),
+                models: vec![],
+            },
+            Backend {
+                name: "no-auth".to_string(),
+                display_name: "No Auth".to_string(),
+                base_url: "https://example.com".to_string(),
+                auth_type_str: "none".to_string(),
+                auth_env_var: "".to_string(),
+                models: vec![],
+            },
+        ],
+    };
+
+    let configured = config.configured_backends();
+
+    // Should have 2 configured backends (one with key, one with no-auth)
+    assert_eq!(configured.len(), 2);
+    assert!(configured.iter().any(|b| b.name == "configured"));
+    assert!(configured.iter().any(|b| b.name == "no-auth"));
+    assert!(!configured.iter().any(|b| b.name == "unconfigured"));
+
+    std::env::remove_var(env_var);
 }

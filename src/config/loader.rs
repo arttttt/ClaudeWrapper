@@ -2,7 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
 
-use crate::config::types::Config;
+use crate::config::credentials::CredentialStatus;
+use crate::config::types::{Backend, Config};
 
 /// Errors that can occur when loading configuration.
 #[derive(Debug, Error)]
@@ -67,6 +68,7 @@ impl Config {
     /// Checks:
     /// - At least one backend is configured
     /// - The active backend exists in the backends list
+    /// - The active backend has valid credentials (or doesn't require them)
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.backends.is_empty() {
             return Err(ConfigError::ValidationError {
@@ -75,17 +77,65 @@ impl Config {
         }
 
         let active = &self.defaults.active;
-        let backend_exists = self.backends.iter().any(|b| &b.name == active);
+        let active_backend = self.backends.iter().find(|b| &b.name == active);
 
-        if !backend_exists {
-            return Err(ConfigError::ValidationError {
-                message: format!(
-                    "Active backend '{}' not found in configured backends",
-                    active
-                ),
-            });
+        match active_backend {
+            None => {
+                return Err(ConfigError::ValidationError {
+                    message: format!(
+                        "Active backend '{}' not found in configured backends",
+                        active
+                    ),
+                });
+            }
+            Some(backend) => {
+                if !backend.is_configured() {
+                    return Err(ConfigError::ValidationError {
+                        message: format!(
+                            "Active backend '{}' is not configured - set {} environment variable",
+                            backend.name, backend.auth_env_var
+                        ),
+                    });
+                }
+            }
         }
 
         Ok(())
+    }
+
+    /// Log the status of all backends at startup.
+    ///
+    /// Logs warnings for unconfigured backends and info for configured ones.
+    /// Never logs actual API key values.
+    pub fn log_backend_status(&self) {
+        for backend in &self.backends {
+            match backend.resolve_credential() {
+                CredentialStatus::Unconfigured { env_var } => {
+                    eprintln!(
+                        "Warning: Backend '{}' is unconfigured - {} is not set",
+                        backend.name, env_var
+                    );
+                }
+                CredentialStatus::Configured(_) => {
+                    // Don't log key value - just confirmation
+                    eprintln!("Backend '{}' configured", backend.name);
+                }
+                CredentialStatus::NoAuth => {
+                    eprintln!("Backend '{}' configured (no auth required)", backend.name);
+                }
+            }
+        }
+    }
+
+    /// Get only backends that are configured (have valid credentials or don't need them).
+    pub fn configured_backends(&self) -> Vec<&Backend> {
+        self.backends.iter().filter(|b| b.is_configured()).collect()
+    }
+
+    /// Get the currently active backend, if configured.
+    pub fn active_backend(&self) -> Option<&Backend> {
+        self.backends
+            .iter()
+            .find(|b| b.name == self.defaults.active && b.is_configured())
     }
 }
