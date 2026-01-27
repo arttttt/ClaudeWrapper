@@ -1,3 +1,4 @@
+use crate::config::ConfigStore;
 use crate::pty::PtyHandle;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::sync::{Arc, Mutex};
@@ -24,10 +25,11 @@ pub struct App {
     status_message: Option<String>,
     size: Option<(u16, u16)>,
     pty: Option<PtyHandle>,
+    config: ConfigStore,
 }
 
 impl App {
-    pub fn new(tick_rate: Duration) -> Self {
+    pub fn new(tick_rate: Duration, config: ConfigStore) -> Self {
         Self {
             should_quit: false,
             tick_rate,
@@ -36,6 +38,7 @@ impl App {
             status_message: None,
             size: None,
             pty: None,
+            config,
         }
     }
 
@@ -115,6 +118,22 @@ impl App {
     #[allow(dead_code)]
     pub fn status_message(&self) -> Option<&str> {
         self.status_message.as_deref()
+    }
+
+    /// Called when config file has been reloaded.
+    ///
+    /// The new config is already available via `self.config.get()`.
+    /// This method can update any cached state derived from config.
+    pub fn on_config_reload(&mut self) {
+        // Currently just a notification point.
+        // Future: update cached backend list, theme, etc.
+        let _config = self.config.get();
+    }
+
+    /// Get access to the config store for reading current config.
+    #[allow(dead_code)]
+    pub fn config(&self) -> &ConfigStore {
+        &self.config
     }
 }
 

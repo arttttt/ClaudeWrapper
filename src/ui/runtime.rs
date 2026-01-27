@@ -1,3 +1,4 @@
+use crate::config::{Config, ConfigStore, ConfigWatcher};
 use crate::pty::{parse_command, PtySession};
 use crate::ui::app::App;
 use crate::ui::events::{AppEvent, EventHandler};
@@ -9,11 +10,27 @@ use ratatui::layout::Rect;
 use std::io;
 use std::time::Duration;
 
+/// Default debounce delay for config file watching (milliseconds).
+const CONFIG_DEBOUNCE_MS: u64 = 200;
+
 pub fn run() -> io::Result<()> {
     let (mut terminal, guard) = setup_terminal()?;
     let tick_rate = Duration::from_millis(250);
-    let mut app = App::new(tick_rate);
+
+    // Load initial config
+    let config = Config::load().unwrap_or_default();
+    let config_path = Config::config_path();
+    let config_store = ConfigStore::new(config, config_path);
+
     let events = EventHandler::new(tick_rate);
+
+    // Start config file watcher (if it fails, we continue without hot-reload)
+    let _config_watcher =
+        ConfigWatcher::start(config_store.clone(), events.sender(), CONFIG_DEBOUNCE_MS)
+            .map_err(|e| eprintln!("Config watcher failed to start: {}", e))
+            .ok();
+
+    let mut app = App::new(tick_rate, config_store);
     let (command, args) = parse_command();
     let mut pty_session = PtySession::spawn(command, args, events.sender())
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
@@ -47,6 +64,7 @@ pub fn run() -> io::Result<()> {
                 app.on_resize(body.width.max(1), body.height.max(1));
             }
             Ok(AppEvent::PtyOutput) => {}
+            Ok(AppEvent::ConfigReload) => app.on_config_reload(),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }

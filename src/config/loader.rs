@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::config::credentials::CredentialStatus;
@@ -43,19 +43,26 @@ impl Config {
     /// - If the file exists, parses it as TOML and validates.
     /// - Returns an error if reading, parsing, or validation fails.
     pub fn load() -> Result<Self, ConfigError> {
-        let path = Self::config_path();
+        Self::load_from(&Self::config_path())
+    }
 
+    /// Loads configuration from a specific path.
+    ///
+    /// - If the file doesn't exist, returns `Config::default()`.
+    /// - If the file exists, parses it as TOML and validates.
+    /// - Returns an error if reading, parsing, or validation fails.
+    pub fn load_from(path: &Path) -> Result<Self, ConfigError> {
         if !path.exists() {
             return Ok(Config::default());
         }
 
-        let content = fs::read_to_string(&path).map_err(|e| ConfigError::ReadError {
-            path: path.clone(),
+        let content = fs::read_to_string(path).map_err(|e| ConfigError::ReadError {
+            path: path.to_path_buf(),
             source: e,
         })?;
 
         let config: Config = toml::from_str(&content).map_err(|e| ConfigError::ParseError {
-            path: path.clone(),
+            path: path.to_path_buf(),
             source: e,
         })?;
 

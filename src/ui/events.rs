@@ -8,6 +8,8 @@ pub enum AppEvent {
     Tick,
     Resize(u16, u16),
     PtyOutput,
+    /// Config file was successfully reloaded
+    ConfigReload,
 }
 
 pub struct EventHandler {
