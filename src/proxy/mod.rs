@@ -16,6 +16,7 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
+use crate::backend::BackendState;
 use crate::config::ConfigStore;
 use crate::proxy::router::RouterEngine;
 use crate::proxy::shutdown::ShutdownManager;
@@ -40,15 +41,16 @@ pub struct ProxyServer {
 }
 
 impl ProxyServer {
-    pub fn new(config: ConfigStore) -> Self {
+    pub fn new(config: ConfigStore) -> Result<Self, crate::backend::BackendError> {
         let addr = "127.0.0.1:8080".parse().expect("Invalid bind address");
         let timeout_config = TimeoutConfig::from(&config.get().defaults);
-        let router = RouterEngine::new(config, timeout_config);
-        Self {
+        let backend_state = BackendState::from_config(config.get())?;
+        let router = RouterEngine::new(config, timeout_config, backend_state);
+        Ok(Self {
             addr,
             router,
             shutdown: Arc::new(ShutdownManager::new()),
-        }
+        })
     }
 
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {

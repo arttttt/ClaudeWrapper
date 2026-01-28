@@ -7,13 +7,14 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use tokio::time::timeout;
 
+use crate::backend::BackendState;
 use crate::config::build_auth_header;
-use crate::config::Config;
 use crate::proxy::error::ProxyError;
 use crate::proxy::timeout::TimeoutConfig;
 
 pub struct UpstreamClient {
     client: Client<HttpConnector, Full<Bytes>>,
+    #[allow(dead_code)]
     timeout_config: TimeoutConfig,
 }
 
@@ -31,12 +32,22 @@ impl UpstreamClient {
     pub async fn forward(
         &self,
         req: Request<Incoming>,
-        config: Config,
+        backend_state: &BackendState,
     ) -> Result<Response<UnsyncBoxBody<Bytes, hyper::Error>>, ProxyError> {
-        let timeout_config = TimeoutConfig::from(&config.defaults);
+        // Get the current active backend configuration at request time
+        // This ensures the entire request uses the same backend, even if
+        // a switch happens mid-request
+        let backend = backend_state.get_active_backend_config()
+            .map_err(|e| ProxyError::BackendNotFound {
+                backend: e.to_string(),
+            })?;
+        
+        // Get timeout config from the backend state's config
+        let defaults = &backend_state.get_config().defaults;
+        let timeout_config = TimeoutConfig::from(defaults);
         
         // Execute the request with timeout
-        let result = timeout(timeout_config.request, self.do_forward(req, config)).await;
+        let result = timeout(timeout_config.request, self.do_forward(req, backend)).await;
         
         match result {
             Ok(response) => response,
@@ -49,7 +60,7 @@ impl UpstreamClient {
     async fn do_forward(
         &self,
         req: Request<Incoming>,
-        config: Config,
+        backend: crate::config::Backend,
     ) -> Result<Response<UnsyncBoxBody<Bytes, hyper::Error>>, ProxyError> {
         let method = req.method().clone();
         let uri = req.uri();
@@ -57,15 +68,6 @@ impl UpstreamClient {
             .path_and_query()
             .map(|pq| pq.as_str())
             .unwrap_or("/");
-
-        let active_backend_name = &config.defaults.active;
-        let backend = config
-            .backends
-            .iter()
-            .find(|b| &b.name == active_backend_name)
-            .ok_or_else(|| ProxyError::BackendNotFound {
-                backend: active_backend_name.clone(),
-            })?;
 
         // Validate backend is configured
         if !backend.is_configured() {
@@ -85,7 +87,7 @@ impl UpstreamClient {
             }
         }
 
-        if let Some((name, value)) = build_auth_header(backend) {
+        if let Some((name, value)) = build_auth_header(&backend) {
             builder = builder.header(&name, value);
         }
 

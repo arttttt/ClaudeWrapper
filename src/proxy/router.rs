@@ -6,6 +6,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use uuid::Uuid;
 
+use crate::backend::BackendState;
 use crate::config::ConfigStore;
 use crate::proxy::error::ErrorResponse;
 use crate::proxy::health::HealthHandler;
@@ -16,15 +17,22 @@ use crate::proxy::upstream::UpstreamClient;
 pub struct RouterEngine {
     health: Arc<HealthHandler>,
     upstream: Arc<UpstreamClient>,
+    #[allow(dead_code)]
     config: ConfigStore,
+    backend_state: BackendState,
 }
 
 impl RouterEngine {
-    pub fn new(config: ConfigStore, timeout_config: TimeoutConfig) -> Self {
+    pub fn new(
+        config: ConfigStore,
+        timeout_config: TimeoutConfig,
+        backend_state: BackendState,
+    ) -> Self {
         Self {
             health: Arc::new(HealthHandler::new()),
             upstream: Arc::new(UpstreamClient::new(timeout_config)),
             config,
+            backend_state,
         }
     }
 
@@ -44,7 +52,7 @@ impl RouterEngine {
         match (req.method(), path) {
             (&Method::GET, "/health") => self.health.handle().await,
             _ => {
-                match self.upstream.forward(req, self.config.get()).await {
+                match self.upstream.forward(req, &self.backend_state).await {
                     Ok(resp) => Ok(resp),
                     Err(e) => {
                         tracing::error!(
