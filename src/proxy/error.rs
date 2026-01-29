@@ -3,9 +3,9 @@
 //! Provides structured error classification, HTTP status code mapping,
 //! and JSON error response generation.
 
-use http_body_util::Full;
-use hyper::body::Bytes;
-use hyper::{Response, StatusCode};
+use axum::body::Body;
+use axum::http::StatusCode;
+use axum::response::Response;
 use thiserror::Error;
 
 use crate::config::ConfigError;
@@ -30,7 +30,7 @@ pub enum ProxyError {
     ConnectionError {
         backend: String,
         #[source]
-        source: hyper_util::client::legacy::Error,
+        source: reqwest::Error,
     },
 
     /// Request exceeded total timeout
@@ -53,13 +53,13 @@ pub enum ProxyError {
     #[error("Internal error: {0}")]
     Internal(String),
 
-    /// HTTP error from hyper
+    /// HTTP error from request building
     #[error("HTTP error: {0}")]
     Http(String),
 }
 
-impl From<hyper::http::Error> for ProxyError {
-    fn from(err: hyper::http::Error) -> Self {
+impl From<axum::http::Error> for ProxyError {
+    fn from(err: axum::http::Error) -> Self {
         ProxyError::Http(err.to_string())
     }
 }
@@ -105,7 +105,7 @@ pub struct ErrorResponse;
 
 impl ErrorResponse {
     /// Create a JSON error response from a ProxyError
-    pub fn from_error(err: &ProxyError, request_id: &str) -> Response<Full<Bytes>> {
+    pub fn from_error(err: &ProxyError, request_id: &str) -> Response {
         let body = serde_json::json!({
             "error": {
                 "type": err.error_type(),
@@ -117,7 +117,7 @@ impl ErrorResponse {
         Response::builder()
             .status(err.status_code())
             .header("Content-Type", "application/json")
-            .body(Full::new(Bytes::from(body.to_string())))
+            .body(Body::from(body.to_string()))
             .expect("Failed to build error response")
     }
 }

@@ -4,7 +4,7 @@ async fn test_health_endpoint() {
     use http_body_util::BodyExt;
 
     let handler = HealthHandler::new();
-    let resp = handler.handle().await.unwrap();
+    let resp = handler.handle().await;
 
     assert_eq!(resp.status().as_u16(), 200);
 

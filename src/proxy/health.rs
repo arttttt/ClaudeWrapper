@@ -1,9 +1,7 @@
-use hyper::{Response};
-use hyper::header::CONTENT_TYPE;
-use hyper::body::Bytes;
-use http_body_util::{Full, BodyExt, combinators::UnsyncBoxBody};
+use axum::response::Response;
+use axum::response::IntoResponse;
+use axum::Json;
 use serde::Serialize;
-use anyhow::Result;
 
 #[derive(Debug, Serialize)]
 pub struct HealthStatus {
@@ -18,23 +16,13 @@ impl HealthHandler {
         Self
     }
 
-    pub async fn handle(&self) -> Result<Response<UnsyncBoxBody<Bytes, hyper::Error>>> {
+    pub async fn handle(&self) -> Response {
         let health = HealthStatus {
             status: "healthy".to_string(),
             service: "claudewrapper".to_string(),
         };
 
-        let json = serde_json::to_string(&health).unwrap_or_default();
-
-        Ok(Response::builder()
-            .status(200)
-            .header(CONTENT_TYPE, "application/json")
-            .body(
-                Full::new(Bytes::from(json))
-                    .map_err(|_| -> hyper::Error { unreachable!() })
-                    .boxed_unsync()
-            )
-            .unwrap())
+        Json(health).into_response()
     }
 }
 

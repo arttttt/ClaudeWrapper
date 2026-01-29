@@ -1,9 +1,10 @@
-use hyper::{Request, Response, Method};
-use hyper::body::Incoming;
-use hyper::body::Bytes;
-use http_body_util::{BodyExt, Full, combinators::UnsyncBoxBody};
+use axum::body::Body;
+use axum::extract::{RawQuery, State};
+use axum::http::Request;
+use axum::response::Response;
+use axum::routing::get;
+use axum::Router;
 use std::sync::Arc;
-use anyhow::Result;
 use uuid::Uuid;
 
 use crate::backend::BackendState;
@@ -35,49 +36,48 @@ impl RouterEngine {
             backend_state,
         }
     }
+}
 
-    pub async fn route(&self,
-        req: Request<Incoming>,
-    ) -> Result<Response<UnsyncBoxBody<Bytes, hyper::Error>>> {
-        let request_id = Uuid::new_v4().to_string();
-        tracing::debug!(
-            method = %req.method(),
-            path = %req.uri().path(),
-            request_id = %request_id,
-            "Incoming request"
-        );
-        
-        let path = req.uri().path();
+pub fn build_router(engine: RouterEngine) -> Router {
+    Router::new()
+        .route("/health", get(health_handler))
+        .fallback(proxy_handler)
+        .with_state(engine)
+}
 
-        match (req.method(), path) {
-            (&Method::GET, "/health") => self.health.handle().await,
-            _ => {
-                match self.upstream.forward(req, &self.backend_state).await {
-                    Ok(resp) => Ok(resp),
-                    Err(e) => {
-                        tracing::error!(
-                            request_id = %request_id,
-                            error = %e,
-                            error_type = %e.error_type(),
-                            "Request failed"
-                        );
-                        
-                        let error_response = ErrorResponse::from_error(&e, &request_id
-                        );
-                        
-                        // Convert Full<Bytes> to UnsyncBoxBody
-                        let (parts, body) = error_response.into_parts();
-                        let body_bytes = body.collect().await
-                            .map_err(|e| anyhow::anyhow!("Failed to collect error body: {}", e))?
-                            .to_bytes();
-                        let boxed_body = Full::new(body_bytes)
-                            .map_err(|never: std::convert::Infallible| match never {})
-                            .boxed_unsync();
-                        
-                        Ok(Response::from_parts(parts, boxed_body))
-                    }
-                }
-            }
+async fn health_handler(
+    State(state): State<RouterEngine>,
+    RawQuery(_query): RawQuery,
+) -> Response {
+    state.health.handle().await
+}
+
+async fn proxy_handler(
+    State(state): State<RouterEngine>,
+    RawQuery(query): RawQuery,
+    req: Request<Body>,
+) -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    let query_str = query.as_deref().unwrap_or("");
+    tracing::debug!(
+        method = %req.method(),
+        path = %req.uri().path(),
+        query = %query_str,
+        request_id = %request_id,
+        "Incoming request"
+    );
+
+    match state.upstream.forward(req, &state.backend_state).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!(
+                request_id = %request_id,
+                error = %e,
+                error_type = %e.error_type(),
+                "Request failed"
+            );
+
+            ErrorResponse::from_error(&e, &request_id)
         }
     }
 }

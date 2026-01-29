@@ -18,9 +18,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "si
 uuid = { version = "1.12", features = ["v4"] }
 
 # HTTP Proxy
-hyper = "1.2"
-hyper-util = { version = "0.1", features = ["full"] }
+axum = { version = "0.7", features = ["json"] }
 http-body-util = "0.1"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+tower = "0.4"
 
 # Config
 serde = { version = "1.0", features = ["derive"] }
@@ -40,4 +41,3 @@ anyhow = "1.0.100"
 
 [dev-dependencies]
 tempfile = "3.24"
-reqwest = { version = "0.11", features = ["json"] }

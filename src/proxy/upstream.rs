@@ -1,10 +1,8 @@
-use hyper::{Request, Response};
-use hyper::body::{Bytes, Incoming};
-use hyper::header::{HOST, CONTENT_TYPE};
-use http_body_util::{BodyExt, Full, combinators::UnsyncBoxBody};
-use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::TokioExecutor;
+use axum::body::Body;
+use axum::http::header::{CONTENT_TYPE, HOST};
+use axum::http::{Request, Response};
+use http_body_util::BodyExt;
+use reqwest::Client;
 use tokio::time::timeout;
 
 use crate::backend::BackendState;
@@ -13,42 +11,42 @@ use crate::proxy::error::ProxyError;
 use crate::proxy::timeout::TimeoutConfig;
 
 pub struct UpstreamClient {
-    client: Client<HttpConnector, Full<Bytes>>,
-    #[allow(dead_code)]
-    timeout_config: TimeoutConfig,
+    client: Client,
 }
 
 impl UpstreamClient {
     pub fn new(timeout_config: TimeoutConfig) -> Self {
-        let connector = HttpConnector::new();
-        let client = Client::builder(TokioExecutor::new()).build(connector);
+        let client = Client::builder()
+            .connect_timeout(timeout_config.connect)
+            .build()
+            .expect("Failed to build upstream client");
 
         Self {
             client,
-            timeout_config,
         }
     }
 
     pub async fn forward(
         &self,
-        req: Request<Incoming>,
+        req: Request<Body>,
         backend_state: &BackendState,
-    ) -> Result<Response<UnsyncBoxBody<Bytes, hyper::Error>>, ProxyError> {
+    ) -> Result<Response<Body>, ProxyError> {
         // Get the current active backend configuration at request time
         // This ensures the entire request uses the same backend, even if
         // a switch happens mid-request
-        let backend = backend_state.get_active_backend_config()
+        let backend = backend_state
+            .get_active_backend_config()
             .map_err(|e| ProxyError::BackendNotFound {
                 backend: e.to_string(),
             })?;
-        
+
         // Get timeout config from the backend state's config
         let defaults = &backend_state.get_config().defaults;
         let timeout_config = TimeoutConfig::from(defaults);
-        
+
         // Execute the request with timeout
         let result = timeout(timeout_config.request, self.do_forward(req, backend)).await;
-        
+
         match result {
             Ok(response) => response,
             Err(_) => Err(ProxyError::RequestTimeout {
@@ -59,9 +57,9 @@ impl UpstreamClient {
 
     async fn do_forward(
         &self,
-        req: Request<Incoming>,
+        req: Request<Body>,
         backend: crate::config::Backend,
-    ) -> Result<Response<UnsyncBoxBody<Bytes, hyper::Error>>, ProxyError> {
+    ) -> Result<Response<Body>, ProxyError> {
         let method = req.method().clone();
         let uri = req.uri();
         let path_and_query = uri
@@ -78,8 +76,7 @@ impl UpstreamClient {
         }
 
         let upstream_uri = format!("{}{}", backend.base_url, path_and_query);
-
-        let mut builder = Request::builder().method(method).uri(upstream_uri);
+        let mut builder = self.client.request(method, upstream_uri);
 
         for (name, value) in req.headers() {
             if name != HOST {
@@ -98,13 +95,9 @@ impl UpstreamClient {
             .map_err(|e| ProxyError::InvalidRequest(format!("Failed to read request body: {}", e)))?
             .to_bytes();
 
-        let upstream_req = builder
-            .body(Full::new(body_bytes))
-            .map_err(|e| ProxyError::InvalidRequest(format!("Failed to build upstream request: {}", e)))?;
-
-        let upstream_resp = self
-            .client
-            .request(upstream_req)
+        let upstream_resp = builder
+            .body(body_bytes)
+            .send()
             .await
             .map_err(|e| ProxyError::ConnectionError {
                 backend: backend.name.clone(),
@@ -119,26 +112,21 @@ impl UpstreamClient {
         let is_streaming = content_type.map_or(false, |ct| ct.contains("text/event-stream"));
 
         let status = upstream_resp.status();
-        let mut builder = hyper::Response::builder().status(status);
+        let mut response_builder = Response::builder().status(status);
 
         for (name, value) in upstream_resp.headers() {
-            builder = builder.header(name, value);
+            response_builder = response_builder.header(name, value);
         }
 
         if is_streaming {
-            Ok(builder.body(upstream_resp.into_body().boxed_unsync())?)
+            let stream = upstream_resp.bytes_stream();
+            Ok(response_builder.body(Body::from_stream(stream))?)
         } else {
             let body_bytes = upstream_resp
-                .into_body()
-                .collect()
+                .bytes()
                 .await
-                .map_err(|e| ProxyError::Internal(format!("Failed to read response body: {}", e)))?
-                .to_bytes();
-            Ok(builder.body(
-                Full::new(body_bytes)
-                    .map_err(|never: std::convert::Infallible| match never {})
-                    .boxed_unsync(),
-            )?)
+                .map_err(|e| ProxyError::Internal(format!("Failed to read response body: {}", e)))?;
+            Ok(response_builder.body(Body::from(body_bytes))?)
         }
     }
 }
