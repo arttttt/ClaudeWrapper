@@ -19,6 +19,7 @@ pub struct RequestRecord {
     pub ttfb_ms: Option<u64>,
     pub backend: String,
     pub status: Option<u16>,
+    pub timed_out: bool,
     pub request_bytes: u64,
     pub response_bytes: u64,
     pub request_analysis: Option<RequestAnalysis>,
@@ -133,6 +134,7 @@ impl ObservabilityHub {
             ttfb_ms: None,
             backend: active_backend.to_string(),
             status: None,
+            timed_out: false,
             request_bytes: 0,
             response_bytes: 0,
             request_analysis: None,
@@ -298,6 +300,10 @@ impl RequestSpan {
         self.timing.mark_completed();
     }
 
+    pub fn mark_timed_out(&mut self) {
+        self.record.timed_out = true;
+    }
+
     pub fn record_mut(&mut self) -> &mut RequestRecord {
         &mut self.record
     }
@@ -411,9 +417,11 @@ impl BackendAccumulator {
             } else if (500..600).contains(&status) {
                 self.server_error_5xx += 1;
             }
-            if status == 504 {
-                self.timeouts += 1;
-            }
+        }
+
+        // Track timeouts from both 504 status and reqwest timeout errors
+        if record.timed_out || record.status == Some(504) {
+            self.timeouts += 1;
         }
 
         if let Some(latency_ms) = record.latency_ms {
@@ -493,6 +501,6 @@ fn percentile(values: &[u64], percentile: f64) -> Option<u64> {
     if values.is_empty() {
         return None;
     }
-    let rank = ((values.len() - 1) as f64 * percentile).round() as usize;
+    let rank = (values.len().saturating_sub(1) as f64 * percentile).round() as usize;
     values.get(rank).copied()
 }

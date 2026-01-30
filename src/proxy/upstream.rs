@@ -153,6 +153,7 @@ impl UpstreamClient {
                         let timeout_err = ProxyError::RequestTimeout {
                             duration: self.timeout_config.request.as_secs(),
                         };
+                        span.mark_timed_out();
                         observability.finish_error(span, Some(timeout_err.status_code().as_u16()));
                         return Err(timeout_err);
                     }
