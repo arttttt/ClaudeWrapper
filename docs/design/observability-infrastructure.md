@@ -135,25 +135,25 @@ impl RequestRingBuffer {
 ### Pre-Request Hook
 
 - Runs before the upstream request is sent.
-- Creates an initial `RequestRecord` with ID, start timestamp, and request size.
+- Creates an initial `RequestRecord` with ID and start timestamp.
 - Allows plugins to enrich record and propose a backend override.
 
 ```rust
 pub struct PreRequestContext<'a> {
     pub request_id: &'a str,
     pub request: &'a Request<Body>,
-    pub backend: &'a str,
+    pub active_backend: &'a str,
     pub record: &'a mut RequestRecord,
 }
 
-pub enum BackendDecision {
-    UseActive,
-    Override(String),
+pub struct BackendOverride {
+    pub backend: String,
+    pub reason: String,
 }
 
 pub trait ObservabilityPlugin: Send + Sync {
-    fn pre_request(&self, ctx: &mut PreRequestContext) -> BackendDecision {
-        BackendDecision::UseActive
+    fn pre_request(&self, ctx: &mut PreRequestContext) -> Option<BackendOverride> {
+        None
     }
 
     fn post_response(&self, ctx: &mut PostResponseContext) {}
@@ -169,7 +169,6 @@ pub trait ObservabilityPlugin: Send + Sync {
 ```rust
 pub struct PostResponseContext<'a> {
     pub request_id: &'a str,
-    pub response_status: Option<u16>,
     pub record: &'a mut RequestRecord,
 }
 ```
