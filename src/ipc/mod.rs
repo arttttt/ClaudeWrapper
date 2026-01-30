@@ -15,6 +15,17 @@ pub enum IpcError {
     Timeout,
 }
 
+impl std::fmt::Display for IpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IpcError::Disconnected => write!(f, "IPC channel disconnected"),
+            IpcError::Timeout => write!(f, "IPC request timed out"),
+        }
+    }
+}
+
+impl std::error::Error for IpcError {}
+
 #[derive(Debug, Clone)]
 pub struct ProxyStatus {
     pub active_backend: String,
@@ -145,7 +156,9 @@ impl IpcServer {
                     let result = backend_state
                         .switch_backend(&backend_id)
                         .map(|_| backend_state.get_active_backend());
-                    let _ = respond_to.send(result);
+                    if respond_to.send(result).is_err() {
+                        tracing::trace!("IPC: SwitchBackend response dropped (receiver gone)");
+                    }
                 }
                 IpcCommand::GetStatus { respond_to } => {
                     let snapshot = observability.snapshot();
@@ -160,7 +173,9 @@ impl IpcServer {
                         total_requests,
                         healthy: !shutdown.is_shutting_down(),
                     };
-                    let _ = respond_to.send(status);
+                    if respond_to.send(status).is_err() {
+                        tracing::trace!("IPC: GetStatus response dropped (receiver gone)");
+                    }
                 }
                 IpcCommand::GetMetrics {
                     backend_id,
@@ -168,7 +183,9 @@ impl IpcServer {
                 } => {
                     let snapshot = observability.snapshot();
                     let filtered = filter_metrics(snapshot, backend_id.as_deref());
-                    let _ = respond_to.send(filtered);
+                    if respond_to.send(filtered).is_err() {
+                        tracing::trace!("IPC: GetMetrics response dropped (receiver gone)");
+                    }
                 }
                 IpcCommand::ListBackends { respond_to } => {
                     let config = backend_state.get_config();
@@ -182,7 +199,9 @@ impl IpcServer {
                             is_configured: backend.is_configured(),
                         });
                     }
-                    let _ = respond_to.send(backends);
+                    if respond_to.send(backends).is_err() {
+                        tracing::trace!("IPC: ListBackends response dropped (receiver gone)");
+                    }
                 }
             }
         }
@@ -308,5 +327,23 @@ mod tests {
         drop(server);
         let result = client.get_status().await;
         assert!(matches!(result, Err(IpcError::Disconnected)));
+    }
+
+    #[tokio::test]
+    async fn ipc_timeout_returns_error() {
+        let (client, mut server) = IpcLayer::new();
+
+        // Spawn a "slow" server that receives but never responds
+        let server_task = tokio::spawn(async move {
+            if let Some(_command) = server.receiver.recv().await {
+                // Intentionally don't respond - simulate hung proxy
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        });
+
+        let result = client.get_status().await;
+        assert!(matches!(result, Err(IpcError::Timeout)));
+
+        server_task.abort();
     }
 }
