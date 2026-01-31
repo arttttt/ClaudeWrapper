@@ -1,9 +1,7 @@
-//! Credential resolution from environment variables.
+//! Credential resolution from configuration.
 //!
 //! This module provides secure handling of API keys and credentials
-//! resolved from environment variables at runtime.
-
-use std::env;
+//! resolved from the config at runtime.
 
 use super::types::Backend;
 
@@ -68,10 +66,10 @@ impl std::fmt::Display for SecureString {
 pub enum CredentialStatus {
     /// API key resolved successfully.
     Configured(SecureString),
-    /// Environment variable is missing or empty.
+    /// API key is missing or empty.
     Unconfigured {
-        /// Name of the missing environment variable.
-        env_var: String,
+        /// Reason for missing configuration.
+        reason: String,
     },
     /// No authentication required for this backend.
     NoAuth,
@@ -96,13 +94,8 @@ impl Backend {
                         return CredentialStatus::Configured(SecureString::new(key.clone()));
                     }
                 }
-                match env::var(&self.auth_env_var) {
-                    Ok(value) if !value.is_empty() => {
-                        CredentialStatus::Configured(SecureString::new(value))
-                    }
-                    _ => CredentialStatus::Unconfigured {
-                        env_var: self.auth_env_var.clone(),
-                    },
+                CredentialStatus::Unconfigured {
+                    reason: "api_key is not set".to_string(),
                 }
             }
         }
@@ -157,7 +150,6 @@ mod tests {
             display_name: "Test".to_string(),
             base_url: "https://example.com".to_string(),
             auth_type_str: "none".to_string(),
-            auth_env_var: "".to_string(),
             api_key: None,
             models: vec![],
         };
