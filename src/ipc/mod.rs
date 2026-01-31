@@ -40,6 +40,7 @@ pub struct BackendInfo {
     pub display_name: String,
     pub is_active: bool,
     pub is_configured: bool,
+    pub model_hint: Option<String>,
 }
 
 pub enum IpcCommand {
@@ -192,11 +193,13 @@ impl IpcServer {
                     let active_backend = backend_state.get_active_backend();
                     let mut backends = Vec::with_capacity(config.backends.len());
                     for backend in config.backends {
+                        let model_hint = backend.models.first().cloned();
                         backends.push(BackendInfo {
                             id: backend.name.clone(),
                             display_name: backend.display_name.clone(),
                             is_active: backend.name == active_backend,
                             is_configured: backend.is_configured(),
+                            model_hint,
                         });
                     }
                     if respond_to.send(backends).is_err() {

@@ -3,7 +3,9 @@ use crate::ui::footer::Footer;
 use crate::ui::header::Header;
 use crate::ui::layout::{centered_rect_by_size, layout_regions};
 use crate::ui::terminal::TerminalBody;
-use crate::ui::theme::{ACTIVE_HIGHLIGHT, CLAUDE_ORANGE, HEADER_TEXT, POPUP_BORDER, STATUS_ERROR};
+use crate::ui::theme::{
+    ACTIVE_HIGHLIGHT, CLAUDE_ORANGE, HEADER_TEXT, POPUP_BORDER, STATUS_ERROR, STATUS_OK,
+};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -88,34 +90,47 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                 if app.backends().is_empty() {
                     lines.push(Line::from("No backends available."));
                 } else {
+                    let selected_index = app.backend_selection();
                     for (idx, backend) in app.backends().iter().enumerate() {
-                        let marker = if backend.is_active { "●" } else { "○" };
+                        let status_label = if backend.is_active {
+                            "Active"
+                        } else if backend.is_configured {
+                            "Ready"
+                        } else {
+                            "Missing"
+                        };
+                        let status_color = if backend.is_active || backend.is_configured {
+                            STATUS_OK
+                        } else {
+                            STATUS_ERROR
+                        };
+                        let model_hint = backend.model_hint.as_deref().unwrap_or("unknown");
                         let mut spans = Vec::new();
                         spans.push(Span::styled(
                             format!("{:>2}. ", idx + 1),
                             Style::default().fg(HEADER_TEXT),
                         ));
-                        spans.push(Span::styled(marker, Style::default().fg(HEADER_TEXT)));
-                        spans.push(Span::raw(" "));
                         spans.push(Span::styled(
                             &backend.display_name,
                             Style::default().fg(HEADER_TEXT),
                         ));
-                        if !backend.is_configured {
-                            spans.push(Span::raw(" "));
-                            spans.push(Span::styled(
-                                "(missing credentials)",
-                                Style::default().fg(STATUS_ERROR),
-                            ));
-                        }
+                        spans.push(Span::raw("  "));
+                        spans.push(Span::styled(
+                            format!("[{status_label}]"),
+                            Style::default().fg(status_color),
+                        ));
+                        spans.push(Span::raw("  "));
+                        spans.push(Span::styled(model_hint, Style::default().fg(HEADER_TEXT)));
                         let mut line = Line::from(spans);
-                        if backend.is_active {
+                        if backend.is_active || idx == selected_index {
                             line = line.style(Style::default().bg(ACTIVE_HIGHLIGHT));
                         }
                         lines.push(line);
                     }
                     lines.push(Line::from(""));
-                    lines.push(Line::from("Press a number to switch."));
+                    lines.push(Line::from(
+                        "Up/Down: Move  Enter: Select  Esc/Ctrl+B: Close",
+                    ));
                 }
 
                 if let Some(error) = app.last_ipc_error() {
@@ -123,7 +138,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                     lines.push(Line::from(format!("IPC error: {error}")));
                 }
 
-                ("Switch Backend", lines)
+                ("Select Backend", lines)
             }
         };
 

@@ -32,6 +32,24 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             return;
         }
         if matches!(app.popup_kind(), Some(PopupKind::BackendSwitch)) {
+            match key.code {
+                KeyCode::Up => {
+                    app.move_backend_selection(-1);
+                    return;
+                }
+                KeyCode::Down => {
+                    app.move_backend_selection(1);
+                    return;
+                }
+                KeyCode::Enter => {
+                    let index = app.backend_selection();
+                    if app.request_switch_backend_by_index(index + 1) {
+                        app.close_popup();
+                    }
+                    return;
+                }
+                _ => {}
+            }
             if let KeyCode::Char(ch) = key.code {
                 if ch.is_ascii_digit() {
                     let index = ch.to_digit(10).unwrap_or(0) as usize;

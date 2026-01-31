@@ -44,6 +44,7 @@ pub struct App {
     proxy_status: Option<ProxyStatus>,
     metrics: Option<MetricsSnapshot>,
     backends: Vec<BackendInfo>,
+    backend_selection: usize,
     last_ipc_error: Option<String>,
     last_status_refresh: Instant,
     last_metrics_refresh: Instant,
@@ -66,6 +67,7 @@ impl App {
             proxy_status: None,
             metrics: None,
             backends: Vec::new(),
+            backend_selection: 0,
             last_ipc_error: None,
             last_status_refresh: now,
             last_metrics_refresh: now,
@@ -99,7 +101,12 @@ impl App {
     pub fn toggle_popup(&mut self, kind: PopupKind) -> bool {
         self.focus = match self.focus {
             Focus::Popup(active) if active == kind => Focus::Terminal,
-            _ => Focus::Popup(kind),
+            _ => {
+                if kind == PopupKind::BackendSwitch {
+                    self.reset_backend_selection();
+                }
+                Focus::Popup(kind)
+            }
         };
         matches!(self.focus, Focus::Popup(_))
     }
@@ -168,6 +175,10 @@ impl App {
         &self.backends
     }
 
+    pub fn backend_selection(&self) -> usize {
+        self.backend_selection
+    }
+
     pub fn last_ipc_error(&self) -> Option<&str> {
         self.last_ipc_error.as_deref()
     }
@@ -181,7 +192,13 @@ impl App {
     }
 
     pub fn update_backends(&mut self, backends: Vec<BackendInfo>) {
+        let was_empty = self.backends.is_empty();
         self.backends = backends;
+        if was_empty {
+            self.reset_backend_selection();
+            return;
+        }
+        self.clamp_backend_selection();
     }
 
     pub fn set_ipc_error(&mut self, message: String) {
@@ -215,6 +232,29 @@ impl App {
         self.send_command(UiCommand::SwitchBackend {
             backend_id: backend.id.clone(),
         })
+    }
+
+    pub fn move_backend_selection(&mut self, direction: i32) {
+        if self.backends.is_empty() {
+            self.backend_selection = 0;
+            return;
+        }
+
+        let len = self.backends.len();
+        let current = self.backend_selection.min(len.saturating_sub(1));
+        let next = if direction.is_negative() {
+            if current == 0 {
+                len - 1
+            } else {
+                current - 1
+            }
+        } else if current + 1 >= len {
+            0
+        } else {
+            current + 1
+        };
+
+        self.backend_selection = next;
     }
 
     pub fn should_refresh_status(&mut self, interval: Duration) -> bool {
@@ -273,6 +313,25 @@ impl App {
                 false
             }
         }
+    }
+
+    fn reset_backend_selection(&mut self) {
+        self.backend_selection = self.active_backend_index().unwrap_or(0);
+    }
+
+    fn clamp_backend_selection(&mut self) {
+        if self.backends.is_empty() {
+            self.backend_selection = 0;
+            return;
+        }
+        let max_index = self.backends.len() - 1;
+        if self.backend_selection > max_index {
+            self.backend_selection = max_index;
+        }
+    }
+
+    fn active_backend_index(&self) -> Option<usize> {
+        self.backends.iter().position(|backend| backend.is_active)
     }
 }
 
