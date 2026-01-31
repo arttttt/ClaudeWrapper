@@ -108,24 +108,28 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                         };
                         let is_selected = idx == selected_index;
 
+                        // Apply highlight background to all spans when selected
+                        // (Line::style() doesn't propagate bg to pre-styled spans)
+                        let base_style = if is_selected {
+                            Style::default().bg(ACTIVE_HIGHLIGHT)
+                        } else {
+                            Style::default()
+                        };
+
                         let mut spans = Vec::new();
                         spans.push(Span::styled(
                             format!("    {}. ", idx + 1),
-                            Style::default().fg(HEADER_TEXT),
+                            base_style.fg(HEADER_TEXT),
                         ));
                         spans.push(Span::styled(
                             format!("{:<width$}", backend.display_name, width = max_name_width),
-                            Style::default().fg(HEADER_TEXT),
+                            base_style.fg(HEADER_TEXT),
                         ));
-                        spans.push(Span::raw("  ["));
-                        spans.push(Span::styled(status_text, Style::default().fg(status_color)));
-                        spans.push(Span::raw("]"));
+                        spans.push(Span::styled("  [", base_style));
+                        spans.push(Span::styled(status_text, base_style.fg(status_color)));
+                        spans.push(Span::styled("]", base_style));
 
-                        let mut line = Line::from(spans);
-                        if is_selected {
-                            line = line.style(Style::default().bg(ACTIVE_HIGHLIGHT));
-                        }
-                        lines.push(line);
+                        lines.push(Line::from(spans));
                     }
 
                     lines.push(Line::from(""));
