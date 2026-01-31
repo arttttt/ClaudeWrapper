@@ -88,7 +88,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             PopupKind::BackendSwitch => {
                 let mut lines = Vec::new();
                 if app.backends().is_empty() {
-                    lines.push(Line::from("No backends available."));
+                    lines.push(Line::from("    No backends available."));
                 } else {
                     let selected_index = app.backend_selection();
                     let max_name_width = app
@@ -97,77 +97,46 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                         .map(|backend| backend.display_name.chars().count())
                         .max()
                         .unwrap_or(0);
-                    let mut entry_lines: Vec<Vec<Line>> = Vec::new();
 
                     for (idx, backend) in app.backends().iter().enumerate() {
                         let (status_text, status_color) = if backend.is_active {
-                            ("🟢 Active", STATUS_OK)
+                            ("Active", STATUS_OK)
                         } else if backend.is_configured {
-                            ("🟡 Ready", STATUS_OK)
+                            ("Ready", STATUS_OK)
                         } else {
-                            ("🔴 Missing", STATUS_ERROR)
+                            ("Missing", STATUS_ERROR)
                         };
-                        let model_hint = backend.model_hint.as_deref().unwrap_or("unknown");
-                        let highlight = backend.is_active || idx == selected_index;
+                        let is_selected = idx == selected_index;
 
-                        let mut name_spans = Vec::new();
-                        name_spans.push(Span::styled(
-                            format!("{:>2}. ", idx + 1),
+                        let mut spans = Vec::new();
+                        spans.push(Span::styled(
+                            format!("    {}. ", idx + 1),
                             Style::default().fg(HEADER_TEXT),
                         ));
-                        name_spans.push(Span::styled(
+                        spans.push(Span::styled(
                             format!("{:<width$}", backend.display_name, width = max_name_width),
                             Style::default().fg(HEADER_TEXT),
                         ));
-                        name_spans.push(Span::raw("  ["));
-                        name_spans
-                            .push(Span::styled(status_text, Style::default().fg(status_color)));
-                        name_spans.push(Span::raw("]"));
+                        spans.push(Span::raw("  ["));
+                        spans.push(Span::styled(status_text, Style::default().fg(status_color)));
+                        spans.push(Span::raw("]"));
 
-                        let mut name_line = Line::from(name_spans);
-                        let mut model_line = Line::from(vec![
-                            Span::raw("    Model: "),
-                            Span::styled(model_hint, Style::default().fg(HEADER_TEXT)),
-                        ]);
-
-                        if highlight {
-                            let highlight_style = Style::default().bg(ACTIVE_HIGHLIGHT);
-                            name_line = name_line.style(highlight_style);
-                            model_line = model_line.style(highlight_style);
+                        let mut line = Line::from(spans);
+                        if is_selected {
+                            line = line.style(Style::default().bg(ACTIVE_HIGHLIGHT));
                         }
-
-                        entry_lines.push(vec![name_line, model_line]);
-                    }
-
-                    let mut max_line_width = entry_lines
-                        .iter()
-                        .flat_map(|entry| entry.iter())
-                        .map(Line::width)
-                        .max()
-                        .unwrap_or(0);
-
-                    if max_line_width == 0 {
-                        max_line_width = 1;
-                    }
-                    let separator = "-".repeat(max_line_width);
-
-                    for (idx, entry) in entry_lines.into_iter().enumerate() {
-                        lines.extend(entry);
-                        if idx + 1 < app.backends().len() {
-                            lines.push(Line::from(separator.clone()));
-                            lines.push(Line::from(""));
-                        }
+                        lines.push(line);
                     }
 
                     lines.push(Line::from(""));
                     lines.push(Line::from(
-                        "Up/Down: Move  Enter: Select  Esc/Ctrl+B: Close",
+                        "    Up/Down: Move  Enter: Select  Esc/Ctrl+B: Close",
                     ));
                 }
 
                 if let Some(error) = app.last_ipc_error() {
                     lines.push(Line::from(""));
-                    lines.push(Line::from(format!("IPC error: {error}")));
+                    lines.push(Line::from(format!("    IPC error: {error}")));
                 }
 
                 ("Select Backend", lines)
@@ -176,7 +145,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
 
         let content_width = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
         let popup_min_width = match kind {
-            PopupKind::BackendSwitch => 56,
+            PopupKind::BackendSwitch => 60,
             _ => 0,
         };
         let popup_width = content_width.saturating_add(4).max(popup_min_width);
