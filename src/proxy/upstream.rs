@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::header::{CONTENT_TYPE, HOST};
+use axum::http::header::{self, CONTENT_TYPE, HOST};
 use axum::http::{Request, Response};
 use http_body_util::BodyExt;
 use reqwest::Client;
@@ -112,9 +112,11 @@ impl UpstreamClient {
             let mut builder = self.client.request(method.clone(), &upstream_uri);
 
             for (name, value) in headers.iter() {
-                if name != HOST {
-                    builder = builder.header(name, value);
+                // Skip headers that we'll replace with backend-specific auth
+                if name == HOST || name == header::AUTHORIZATION || name.as_str() == "x-api-key" {
+                    continue;
                 }
+                builder = builder.header(name, value);
             }
 
             if let Some((name, value)) = auth_header.as_ref() {
