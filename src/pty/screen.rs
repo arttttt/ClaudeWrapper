@@ -1,4 +1,5 @@
 use std::cmp::max;
+use std::io::Write;
 use termwiz::cell::{AttributeChange, CellAttributes};
 use termwiz::color::ColorAttribute;
 use termwiz::escape::csi::{
@@ -344,6 +345,37 @@ fn translate_osc(osc: Box<OperatingSystemCommand>, changes: &mut Vec<Change>) {
         | OperatingSystemCommand::SetIconNameSun(title) => {
             changes.push(Change::Title(title));
         }
+        OperatingSystemCommand::SetSelection(selection, data) => {
+            forward_osc52_set_selection(selection, &data);
+        }
+        OperatingSystemCommand::ClearSelection(selection) => {
+            forward_osc52_clear_selection(selection);
+        }
+        OperatingSystemCommand::QuerySelection(selection) => {
+            forward_osc52_query_selection(selection);
+        }
         _ => {}
     }
+}
+
+/// Forward OSC 52 SetSelection to parent terminal for clipboard write.
+fn forward_osc52_set_selection(selection: termwiz::escape::osc::Selection, data: &str) {
+    // Data is already base64-encoded by the subprocess
+    let seq = format!("\x1b]52;{};{}\x07", selection, data);
+    let _ = std::io::stdout().write_all(seq.as_bytes());
+    let _ = std::io::stdout().flush();
+}
+
+/// Forward OSC 52 ClearSelection to parent terminal.
+fn forward_osc52_clear_selection(selection: termwiz::escape::osc::Selection) {
+    let seq = format!("\x1b]52;{};\x07", selection);
+    let _ = std::io::stdout().write_all(seq.as_bytes());
+    let _ = std::io::stdout().flush();
+}
+
+/// Forward OSC 52 QuerySelection to parent terminal for clipboard read.
+fn forward_osc52_query_selection(selection: termwiz::escape::osc::Selection) {
+    let seq = format!("\x1b]52;{};?\x07", selection);
+    let _ = std::io::stdout().write_all(seq.as_bytes());
+    let _ = std::io::stdout().flush();
 }

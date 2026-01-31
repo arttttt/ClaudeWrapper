@@ -1,4 +1,5 @@
 use crossterm::cursor::{Hide, Show};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, Clear as TermClear, ClearType, EnterAlternateScreen,
     LeaveAlternateScreen,
@@ -58,6 +59,7 @@ pub fn setup_terminal() -> io::Result<(Terminal<CrosstermBackend<Stdout>>, Termi
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
+    stdout.execute(EnableBracketedPaste)?;
     stdout.execute(TermClear(ClearType::All))?;
     stdout.write_all(b"\x1b[3J")?;
     stdout.flush()?;
@@ -69,6 +71,7 @@ pub fn setup_terminal() -> io::Result<(Terminal<CrosstermBackend<Stdout>>, Termi
     guard.set_cleanup(|| {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
+        let _ = stdout.execute(DisableBracketedPaste);
         let _ = stdout.execute(LeaveAlternateScreen);
         let _ = stdout.execute(Show);
     });

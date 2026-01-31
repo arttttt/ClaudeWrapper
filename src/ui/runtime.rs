@@ -108,6 +108,7 @@ pub fn run() -> io::Result<()> {
 
         match events.next(tick_rate) {
             Ok(AppEvent::Input(key)) => handle_key(&mut app, key),
+            Ok(AppEvent::Paste(text)) => app.on_paste(&text),
             Ok(AppEvent::Tick) => {
                 app.on_tick();
                 if app.should_refresh_status(STATUS_REFRESH_INTERVAL) {

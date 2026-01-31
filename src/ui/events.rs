@@ -8,6 +8,7 @@ use crate::metrics::MetricsSnapshot;
 
 pub enum AppEvent {
     Input(KeyEvent),
+    Paste(String),
     Tick,
     Resize(u16, u16),
     PtyOutput,
@@ -37,6 +38,9 @@ impl EventHandler {
                     match event::read() {
                         Ok(Event::Key(key)) => {
                             let _ = event_tx.send(AppEvent::Input(key));
+                        }
+                        Ok(Event::Paste(text)) => {
+                            let _ = event_tx.send(AppEvent::Paste(text));
                         }
                         Ok(Event::Resize(cols, rows)) => {
                             let _ = event_tx.send(AppEvent::Resize(cols, rows));

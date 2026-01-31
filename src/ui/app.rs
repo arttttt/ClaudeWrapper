@@ -129,6 +129,16 @@ impl App {
         let _ = pty.send_input(&bytes);
     }
 
+    pub fn on_paste(&mut self, text: &str) {
+        let Some(pty) = &self.pty else {
+            return;
+        };
+        // Send paste content wrapped in bracketed paste escape sequences
+        // so the subprocess knows this is pasted content
+        let bracketed = format!("\x1b[200~{}\x1b[201~", text);
+        let _ = pty.send_input(bracketed.as_bytes());
+    }
+
     pub fn on_resize(&mut self, cols: u16, rows: u16) {
         self.size = Some((cols, rows));
         if let Some(pty) = &self.pty {
