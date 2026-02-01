@@ -25,7 +25,7 @@ fn test_config_default_values() {
     assert_eq!(backend.base_url, "https://api.anthropic.com");
     assert_eq!(backend.auth_type(), AuthType::Passthrough);
     assert!(backend.api_key.is_none());
-    assert_eq!(backend.models, vec!["claude-sonnet-4-20250514"]);
+    // models field was removed - proxy doesn't manage available models
 }
 
 /// Test that Config::config_path() returns a path ending with the expected filename.
@@ -110,7 +110,6 @@ display_name = "Claude"
 base_url = "https://api.anthropic.com"
 auth_type = "api_key"
 api_key = "test-key-123"
-models = ["claude-sonnet-4-20250514", "claude-3-opus-20240229"]
 "#;
 
     let config: Config = toml::from_str(toml_content).expect("Should parse valid TOML");
@@ -118,7 +117,6 @@ models = ["claude-sonnet-4-20250514", "claude-3-opus-20240229"]
     assert_eq!(config.defaults.active, "claude");
     assert_eq!(config.defaults.timeout_seconds, 60);
     assert_eq!(config.backends.len(), 1);
-    assert_eq!(config.backends[0].models.len(), 2);
 }
 
 /// Test that invalid TOML produces a parse error.
@@ -159,7 +157,6 @@ fn test_backend_is_configured_with_api_key() {
         base_url: "https://example.com".to_string(),
         auth_type_str: "api_key".to_string(),
         api_key: Some("test-key-value".to_string()),
-        models: vec![],
     };
 
     assert!(backend.is_configured());
@@ -174,7 +171,6 @@ fn test_backend_not_configured_without_api_key() {
         base_url: "https://example.com".to_string(),
         auth_type_str: "api_key".to_string(),
         api_key: None,
-        models: vec![],
     };
 
     assert!(!backend.is_configured());
@@ -189,7 +185,6 @@ fn test_backend_passthrough_always_configured() {
         base_url: "https://example.com".to_string(),
         auth_type_str: "passthrough".to_string(),
         api_key: None,
-        models: vec![],
     };
 
     assert!(backend.is_configured());
@@ -208,7 +203,6 @@ fn test_build_auth_header_api_key() {
         base_url: "https://example.com".to_string(),
         auth_type_str: "api_key".to_string(),
         api_key: Some("my-secret-key".to_string()),
-        models: vec![],
     };
 
     let header = build_auth_header(&backend);
@@ -228,7 +222,6 @@ fn test_build_auth_header_bearer() {
         base_url: "https://example.com".to_string(),
         auth_type_str: "bearer".to_string(),
         api_key: Some("my-bearer-token".to_string()),
-        models: vec![],
     };
 
     let header = build_auth_header(&backend);
@@ -261,8 +254,7 @@ fn test_validation_fails_unconfigured_active_backend() {
             base_url: "https://example.com".to_string(),
             auth_type_str: "api_key".to_string(),
             api_key: None,
-            models: vec![],
-        }],
+            }],
     };
 
     let result = config.validate();
@@ -300,24 +292,21 @@ fn test_configured_backends_filters_correctly() {
                 base_url: "https://example.com".to_string(),
                 auth_type_str: "api_key".to_string(),
                 api_key: Some("test-key".to_string()),
-                models: vec![],
-            },
+                    },
             Backend {
                 name: "unconfigured".to_string(),
                 display_name: "Unconfigured".to_string(),
                 base_url: "https://example.com".to_string(),
                 auth_type_str: "api_key".to_string(),
                 api_key: None,
-                models: vec![],
-            },
+                    },
             Backend {
                 name: "passthrough".to_string(),
                 display_name: "Passthrough".to_string(),
                 base_url: "https://example.com".to_string(),
                 auth_type_str: "passthrough".to_string(),
                 api_key: None,
-                models: vec![],
-            },
+                    },
         ],
     };
 
