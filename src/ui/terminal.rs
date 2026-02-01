@@ -31,14 +31,23 @@ impl Widget for TerminalBody {
                 let x = area.x + col_idx as u16;
                 let cell = screen.cell(row_idx as u16, col_idx as u16);
                 if let Some(cell) = cell {
+                    // Skip wide character continuation cells - the first cell already
+                    // contains the full character and ratatui handles the width
+                    if cell.is_wide_continuation() {
+                        continue;
+                    }
+
                     let style = style_from_cell(cell);
-                    let symbol = cell.contents();
+
                     if let Some(cell_ref) = buf.cell_mut((x, y)) {
-                        if symbol.is_empty() {
+                        if cell.has_contents() {
+                            // Cell has actual content - render it
+                            cell_ref.set_symbol(&cell.contents()).set_style(style);
+                        } else if cell.bgcolor() != vt100::Color::Default {
+                            // Empty cell but has background color - render space with style
                             cell_ref.set_symbol(" ").set_style(style);
-                        } else {
-                            cell_ref.set_symbol(&symbol).set_style(style);
                         }
+                        // Otherwise leave cell as-is (already cleared by ratatui)
                     }
                 }
             }
