@@ -137,7 +137,7 @@ pub fn run() -> io::Result<()> {
                     app.on_paste(&text);
                 }
             }
-            Ok(AppEvent::ImagePaste(path)) => app.on_image_paste(&path),
+            Ok(AppEvent::ImagePaste(data_uri)) => app.on_image_paste(&data_uri),
             Ok(AppEvent::Tick) => {
                 app.on_tick();
                 if app.should_refresh_status(STATUS_REFRESH_INTERVAL) {
@@ -280,8 +280,8 @@ fn handle_image_paste(app: &mut App, clipboard: &mut Option<ClipboardHandler>) {
     };
 
     match clip.get_content() {
-        ClipboardContent::Image(path) => {
-            app.on_image_paste(&path);
+        ClipboardContent::Image(data_uri) => {
+            app.on_image_paste(&data_uri);
         }
         ClipboardContent::Text(text) => {
             // Fall back to text paste if no image

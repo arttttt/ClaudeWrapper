@@ -139,14 +139,12 @@ impl App {
         let _ = pty.send_input(bracketed.as_bytes());
     }
 
-    pub fn on_image_paste(&mut self, path: &std::path::Path) {
+    pub fn on_image_paste(&mut self, data_uri: &str) {
         let Some(pty) = &self.pty else {
             return;
         };
-        // Send image file path as text input
-        // Claude Code can read images when referenced by path
-        let path_str = path.to_string_lossy();
-        let bracketed = format!("\x1b[200~{}\x1b[201~", path_str);
+        // Send image data URI as text input
+        let bracketed = format!("\x1b[200~{}\x1b[201~", data_uri);
         let _ = pty.send_input(bracketed.as_bytes());
     }
 

@@ -1,5 +1,4 @@
 use crossterm::event::{self, Event, KeyEvent};
-use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,8 +10,8 @@ use crate::shutdown::ShutdownHandle;
 pub enum AppEvent {
     Input(KeyEvent),
     Paste(String),
-    /// Image paste: path to saved image file
-    ImagePaste(PathBuf),
+    /// Image paste: data URI
+    ImagePaste(String),
     Tick,
     Resize(u16, u16),
     PtyOutput,

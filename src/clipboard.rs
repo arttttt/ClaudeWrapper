@@ -6,15 +6,18 @@
 //! - File paths (platform-dependent)
 
 use arboard::Clipboard;
-use std::path::PathBuf;
+use base64::Engine as _;
+use image::codecs::jpeg::JpegEncoder;
+use image::codecs::png::PngEncoder;
+use image::{ExtendedColorType, ImageEncoder};
 
 /// Content types that can be read from the clipboard.
 #[derive(Debug)]
 pub enum ClipboardContent {
     /// Text content ready for paste.
     Text(String),
-    /// Image saved to a temporary file.
-    Image(PathBuf),
+    /// Image encoded as data URI (PNG base64).
+    Image(String),
     /// No usable content in clipboard.
     Empty,
 }
@@ -22,32 +25,24 @@ pub enum ClipboardContent {
 /// Handler for clipboard operations.
 pub struct ClipboardHandler {
     clipboard: Clipboard,
-    temp_dir: PathBuf,
 }
 
 impl ClipboardHandler {
     /// Create a new clipboard handler.
-    ///
-    /// Creates temp directory for image files if it doesn't exist.
     pub fn new() -> Result<Self, arboard::Error> {
         let clipboard = Clipboard::new()?;
-        let temp_dir = std::env::temp_dir().join("claudewrapper");
-        std::fs::create_dir_all(&temp_dir).ok();
-        Ok(Self {
-            clipboard,
-            temp_dir,
-        })
+        Ok(Self { clipboard })
     }
 
     /// Get clipboard content, preferring image over text.
     ///
-    /// If clipboard contains an image, saves it to a temp file and returns the path.
+    /// If clipboard contains an image, encodes it as a data URI and returns it.
     /// Otherwise returns text content if available.
     pub fn get_content(&mut self) -> ClipboardContent {
         // Try image first
         if let Ok(image_data) = self.clipboard.get_image() {
-            if let Some(path) = self.save_image(&image_data) {
-                return ClipboardContent::Image(path);
+            if let Some(data_uri) = self.image_to_data_uri(&image_data) {
+                return ClipboardContent::Image(data_uri);
             }
         }
 
@@ -75,24 +70,35 @@ impl ClipboardHandler {
         self.clipboard.get_image().is_ok()
     }
 
-    /// Save image data to a temporary PNG file.
-    fn save_image(&self, image_data: &arboard::ImageData) -> Option<PathBuf> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_millis();
-        let filename = format!("paste_{}.png", timestamp);
-        let path = self.temp_dir.join(&filename);
+    /// Encode image data as a PNG or JPEG data URI.
+    fn image_to_data_uri(&self, image_data: &arboard::ImageData) -> Option<String> {
+        let width = image_data.width as u32;
+        let height = image_data.height as u32;
+        let has_alpha = image_data.bytes.chunks(4).any(|pixel| pixel[3] != 255);
 
-        // Convert RGBA bytes to image and save as PNG
-        let img = image::RgbaImage::from_raw(
-            image_data.width as u32,
-            image_data.height as u32,
-            image_data.bytes.to_vec(),
-        )?;
-
-        img.save(&path).ok()?;
-        Some(path)
+        if has_alpha {
+            let mut png_bytes = Vec::new();
+            let encoder = PngEncoder::new(&mut png_bytes);
+            encoder
+                .write_image(&image_data.bytes, width, height, ExtendedColorType::Rgba8)
+                .ok()?;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+            Some(format!("data:image/png;base64,{}", b64))
+        } else {
+            let mut rgb_bytes = Vec::with_capacity((width * height * 3) as usize);
+            for pixel in image_data.bytes.chunks(4) {
+                rgb_bytes.push(pixel[0]);
+                rgb_bytes.push(pixel[1]);
+                rgb_bytes.push(pixel[2]);
+            }
+            let mut jpeg_bytes = Vec::new();
+            let encoder = JpegEncoder::new_with_quality(&mut jpeg_bytes, 85);
+            encoder
+                .write_image(&rgb_bytes, width, height, ExtendedColorType::Rgb8)
+                .ok()?;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes);
+            Some(format!("data:image/jpeg;base64,{}", b64))
+        }
     }
 }
 
