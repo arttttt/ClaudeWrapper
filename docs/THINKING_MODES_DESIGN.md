@@ -8,6 +8,76 @@
 2. **Потеря суммаризации**: Anthropic использует отдельную модель для суммаризации thinking блоков — при конвертации в текст эта функция теряется
 3. **Раздувание контекста**: Сырые thinking блоки накапливаются, занимая место в контексте
 4. **Зависание extended thinking**: В некоторых случаях это приводит к зависанию стрима
+5. **Потеря signature**: При конвертации теряется криптографическая подпись (см. ниже)
+
+---
+
+## Анатомия Thinking блока (важно!)
+
+### Структура блока
+
+```json
+{
+  "type": "thinking",
+  "thinking": "Let me analyze this problem step by step...",
+  "signature": "WyJhbnRocm9waWMiLCIxMjM0NTY3ODkw..."
+}
+```
+
+**Signature** — криптографическая подпись, которая:
+- Генерируется API Anthropic для каждого thinking блока
+- **Валидируется** при последующих запросах
+- **НЕЛЬЗЯ** модифицировать, урезать или генерировать
+- При несовпадении — API возвращает 400 error
+
+### Требования API (из официального cookbook)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Порядок блоков в assistant message (СТРОГО):               │
+│                                                              │
+│  1. [thinking/redacted_thinking] ← ОБЯЗАТЕЛЬНО первый       │
+│  2. [tool_use]                   ← После thinking           │
+│  3. ...                                                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Правила:**
+1. При `thinking: enabled` — assistant message **ДОЛЖЕН** начинаться с thinking блока
+2. Thinking блок **ДОЛЖЕН** содержать оригинальный signature
+3. После `tool_result` Claude **НЕ** генерирует новый thinking (только после user message)
+4. Блоки передаются **as-is** — любая модификация invalidates signature
+
+### Redacted Thinking
+
+```json
+{
+  "type": "redacted_thinking",
+  "data": "eyJhbGciOiJIUzI1NiIs..."  // Зашифрованные данные
+}
+```
+
+Иногда Claude возвращает `redacted_thinking` вместо `thinking`:
+- Содержимое зашифровано (поле `data`)
+- **Также требует сохранения** в истории
+- Signature не нужен (данные уже подписаны)
+
+### Влияние на наши режимы
+
+| Режим | Signature | Tool Use |
+|-------|-----------|----------|
+| `strip` | Не важен (удаляем блок) | ✅ Работает |
+| `summarize` | Сохраняем до switch, затем теряем | ⚠️ После switch tools могут сломаться |
+| `native` | Полностью сохраняется | ✅ Работает |
+
+### Известные проблемы в других проектах
+
+| Проект | Проблема | Причина |
+|--------|----------|---------|
+| LiteLLM | 400 при tool use | Не сохраняют signature в streaming |
+| OpenCode | "must start with thinking" | Нарушен порядок блоков |
+| Cline | "Invalid signature" | Смена моделей без очистки |
+| Vercel AI | Потеря reasoning | Не persist-ят полные блоки |
 
 ## Решение: Три режима работы с thinking
 
@@ -230,6 +300,19 @@ Decision: Use atomic port allocation. Next: implement fix in proxy/server.rs
 - Требует настройки summarizer backend
 - Потеря деталей при суммаризации (только при switch)
 - После переключения новый backend не видит "нативный" thinking
+
+### ⚠️ Важно: Signature и Tool Use
+
+После суммаризации **signature теряется**. Это означает:
+
+1. Если Claude использовал tools ДО switch — history содержит tool_use блоки
+2. После switch thinking заменён на текстовое резюме (без signature)
+3. API может отклонить запрос: "Expected thinking block before tool_use"
+
+**Решения:**
+- **Вариант A**: Суммаризировать только thinking, оставляя tool_use/tool_result as-is
+- **Вариант B**: При наличии tools — использовать более агрессивную очистку
+- **Вариант C**: Предупреждать пользователя о потенциальных проблемах
 
 ### Реализация
 
@@ -652,7 +735,22 @@ ThinkingMode::ConvertToTags => {
 
 ### C. Ссылки
 
+**Официальная документация:**
 - [Anthropic Extended Thinking Docs](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+- [Extended Thinking with Tool Use (Cookbook)](https://github.com/anthropics/anthropic-cookbook/blob/main/extended_thinking/extended_thinking_with_tool_use.ipynb)
 - [Context Editing Docs](https://platform.claude.com/docs/en/build-with-claude/context-editing)
-- [LiteLLM Reasoning Content](https://docs.litellm.ai/docs/reasoning_content)
-- [OpenRouter Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)
+
+**Унификация LLM провайдеров:**
+- [one-api](https://github.com/songquanpeng/one-api) — Go, 29k stars, relay + adapters
+- [LiteLLM](https://github.com/BerriAI/litellm) — Python, OpenAI-compatible wrapper
+- [inference-gateway](https://github.com/inference-gateway/inference-gateway) — Go, unified proxy
+- [llm-connector](https://github.com/lipish/llm-connector) — Rust, protocol/provider separation
+
+**Проекты с обработкой thinking:**
+- [LiteLLM issues #8961, #11302](https://github.com/BerriAI/litellm/issues/8961) — проблемы с signature
+- [OpenCode issue #6176](https://github.com/anomalyco/opencode/issues/6176) — требования к thinking + tools
+- [Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager) — обработка при смене backend
+
+**Архитектурные паттерны:**
+- [tower-llm](https://docs.rs/tower-llm) — Rust, Tower-based LLM agents
+- [async_trait](https://docs.rs/async-trait) — async методы в trait objects
