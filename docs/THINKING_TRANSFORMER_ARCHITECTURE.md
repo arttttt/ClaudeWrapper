@@ -562,21 +562,23 @@ src/proxy/thinking/
 - [x] Тесты для strip режима
 - [x] Удалить legacy режимы (DropSignature, ConvertToText, ConvertToTags)
 
-### Phase 2: Summarize Mode 🔄 TODO
+### Phase 2: Summarize Mode 🔄 IN PROGRESS
 
-#### Phase 2.1: Конфигурация
-- [ ] 2.1.1: Добавить `SummarizeConfig` структуру в `src/config/types.rs`
-- [ ] 2.1.2: Добавить `summarize: Option<SummarizeConfig>` в `ThinkingConfig`
-- [ ] 2.1.3: Дефолтные значения и serde аннотации
-- [ ] 2.1.4: Тест парсинга TOML с секцией `[thinking.summarize]`
+#### Phase 2.1: Конфигурация ✅ DONE
+- [x] 2.1.1: Добавить `SummarizeConfig` структуру в `src/config/types.rs`
+- [x] 2.1.2: Добавить `summarize: SummarizeConfig` в `ThinkingConfig`
+- [x] 2.1.3: Дефолтные значения и serde аннотации
+- [x] 2.1.4: Тест парсинга TOML с секцией `[thinking.summarize]`
 
-#### Phase 2.2: SummarizeTransformer каркас
-- [ ] 2.2.1: Создать файл `src/proxy/thinking/summarize.rs`
-- [ ] 2.2.2: Структура с полями `last_messages`, `pending_summary`, `config`
-- [ ] 2.2.3: Конструктор `new(config: SummarizeConfig)`
-- [ ] 2.2.4: Реализация `name()` → "summarize"
-- [ ] 2.2.5: Базовый `transform_request` — только сохранение messages
-- [ ] 2.2.6: Добавить в `mod.rs` и `TransformerRegistry::create_transformer`
+#### Phase 2.2: SummarizeTransformer каркас ✅ DONE
+- [x] 2.2.1: Создать файл `src/proxy/thinking/summarize.rs`
+- [x] 2.2.2: Структура с полями `last_messages`, `pending_summary`, `config`
+- [x] 2.2.3: Конструктор `new(config: SummarizeConfig)`
+- [x] 2.2.4: Реализация `name()` → "summarize"
+- [x] 2.2.5: Базовый `transform_request` — сохранение messages + strip thinking
+- [x] 2.2.6: Добавить в `mod.rs` и `TransformerRegistry::create_transformer`
+- [x] 2.2.7: Обновить `router.rs` — передавать `ThinkingConfig` вместо `ThinkingMode`
+- [x] 2.2.8: Тесты: registry_creates_summarize_transformer, registry_with_full_config
 
 #### Phase 2.3: Strip логика в Summarize
 - [ ] 2.3.1: Вынести strip логику в переиспользуемую функцию `strip_thinking_blocks()`

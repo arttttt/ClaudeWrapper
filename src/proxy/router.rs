@@ -39,7 +39,7 @@ impl RouterEngine {
         debug_logger: Arc<DebugLogger>,
     ) -> Self {
         let transformer_registry = Arc::new(TransformerRegistry::new(
-            config.get().thinking.mode.clone(),
+            config.get().thinking.clone(),
         ));
         Self {
             health: Arc::new(HealthHandler::new()),

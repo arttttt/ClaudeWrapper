@@ -28,14 +28,16 @@
 mod context;
 mod error;
 mod strip;
+mod summarize;
 mod traits;
 
 pub use context::{TransformContext, TransformResult, TransformStats};
 pub use error::TransformError;
 pub use strip::StripTransformer;
+pub use summarize::SummarizeTransformer;
 pub use traits::ThinkingTransformer;
 
-use crate::config::ThinkingMode;
+use crate::config::{ThinkingConfig, ThinkingMode};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -44,31 +46,37 @@ use tokio::sync::RwLock;
 /// Supports hot-swapping transformers when configuration changes.
 pub struct TransformerRegistry {
     current: RwLock<Arc<dyn ThinkingTransformer>>,
-    mode: std::sync::RwLock<ThinkingMode>,
+    config: std::sync::RwLock<ThinkingConfig>,
 }
 
 impl TransformerRegistry {
-    /// Create a new registry with the given thinking mode.
-    pub fn new(mode: ThinkingMode) -> Self {
-        let transformer = Self::create_transformer(&mode);
+    /// Create a new registry with the given thinking config.
+    pub fn new(config: ThinkingConfig) -> Self {
+        let transformer = Self::create_transformer(&config);
         Self {
             current: RwLock::new(transformer),
-            mode: std::sync::RwLock::new(mode),
+            config: std::sync::RwLock::new(config),
         }
     }
 
-    /// Create a transformer for the given mode.
-    fn create_transformer(mode: &ThinkingMode) -> Arc<dyn ThinkingTransformer> {
-        match mode {
+    /// Create a new registry with just a mode (uses default summarize config).
+    pub fn with_mode(mode: ThinkingMode) -> Self {
+        Self::new(ThinkingConfig {
+            mode,
+            ..Default::default()
+        })
+    }
+
+    /// Create a transformer for the given config.
+    fn create_transformer(config: &ThinkingConfig) -> Arc<dyn ThinkingTransformer> {
+        match config.mode {
             ThinkingMode::Strip => Arc::new(StripTransformer),
 
-            // Future modes - fall back to Strip for now
             ThinkingMode::Summarize => {
-                tracing::warn!(
-                    "ThinkingMode::Summarize is not yet implemented, using Strip instead"
-                );
-                Arc::new(StripTransformer)
+                tracing::info!("Creating SummarizeTransformer");
+                Arc::new(SummarizeTransformer::new(config.summarize.clone()))
             }
+
             ThinkingMode::Native => {
                 tracing::warn!(
                     "ThinkingMode::Native is not yet implemented, using Strip instead"
@@ -89,38 +97,44 @@ impl TransformerRegistry {
     /// Update the thinking mode (hot-swap transformer).
     pub async fn update_mode(&self, mode: ThinkingMode) {
         // Check and update mode with sync lock, then drop it before async work
-        let needs_transformer_update = {
-            let mut current_mode = self.mode.write().expect("mode lock poisoned");
-            if *current_mode != mode {
+        let new_config = {
+            let mut current_config = self.config.write().expect("config lock poisoned");
+            if current_config.mode != mode {
                 tracing::info!(
-                    old_mode = ?*current_mode,
+                    old_mode = ?current_config.mode,
                     new_mode = ?mode,
                     "Switching thinking transformer"
                 );
-                *current_mode = mode.clone();
-                true
+                current_config.mode = mode;
+                Some(current_config.clone())
             } else {
-                false
+                None
             }
         }; // sync lock dropped here
 
         // Now do async work without holding the sync lock
-        if needs_transformer_update {
-            let transformer = Self::create_transformer(&mode);
+        if let Some(config) = new_config {
+            let transformer = Self::create_transformer(&config);
             *self.current.write().await = transformer;
         }
     }
 
     /// Get the current mode.
     pub fn current_mode(&self) -> ThinkingMode {
-        self.mode.read().expect("mode lock poisoned").clone()
+        self.config.read().expect("config lock poisoned").mode.clone()
+    }
+
+    /// Get the current config.
+    pub fn current_config(&self) -> ThinkingConfig {
+        self.config.read().expect("config lock poisoned").clone()
     }
 }
 
 impl std::fmt::Debug for TransformerRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let config = self.config.read().expect("config lock poisoned");
         f.debug_struct("TransformerRegistry")
-            .field("mode", &*self.mode.read().expect("mode lock poisoned"))
+            .field("mode", &config.mode)
             .finish()
     }
 }
@@ -128,24 +142,48 @@ impl std::fmt::Debug for TransformerRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SummarizeConfig;
 
     #[tokio::test]
     async fn registry_creates_strip_transformer() {
-        let registry = TransformerRegistry::new(ThinkingMode::Strip);
+        let registry = TransformerRegistry::with_mode(ThinkingMode::Strip);
         let transformer = registry.get().await;
         assert_eq!(transformer.name(), "strip");
     }
 
     #[tokio::test]
+    async fn registry_creates_summarize_transformer() {
+        let registry = TransformerRegistry::with_mode(ThinkingMode::Summarize);
+        let transformer = registry.get().await;
+        assert_eq!(transformer.name(), "summarize");
+    }
+
+    #[tokio::test]
     async fn registry_hot_swaps_transformer() {
-        let registry = TransformerRegistry::new(ThinkingMode::Strip);
+        let registry = TransformerRegistry::with_mode(ThinkingMode::Strip);
         assert_eq!(registry.current_mode(), ThinkingMode::Strip);
 
-        // Hot swap to Summarize (currently falls back to Strip, but mechanism works)
+        // Hot swap to Summarize
         registry.update_mode(ThinkingMode::Summarize).await;
         assert_eq!(registry.current_mode(), ThinkingMode::Summarize);
-        // Transformer is still Strip (Summarize not yet implemented)
         let transformer = registry.get().await;
-        assert_eq!(transformer.name(), "strip");
+        assert_eq!(transformer.name(), "summarize");
+    }
+
+    #[tokio::test]
+    async fn registry_with_full_config() {
+        let config = ThinkingConfig {
+            mode: ThinkingMode::Summarize,
+            summarize: SummarizeConfig {
+                model: "test-model".to_string(),
+                backend: Some("test-backend".to_string()),
+                max_tokens: 100,
+                prompt: "Test prompt".to_string(),
+            },
+        };
+        let registry = TransformerRegistry::new(config);
+        let transformer = registry.get().await;
+        assert_eq!(transformer.name(), "summarize");
+        assert_eq!(registry.current_mode(), ThinkingMode::Summarize);
     }
 }

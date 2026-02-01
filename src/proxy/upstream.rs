@@ -461,7 +461,7 @@ impl Default for UpstreamClient {
             crate::config::Config::default(),
             crate::config::Config::config_path(),
         );
-        let registry = Arc::new(TransformerRegistry::new(
+        let registry = Arc::new(TransformerRegistry::with_mode(
             crate::config::ThinkingMode::Strip,
         ));
         let debug_logger = Arc::new(DebugLogger::new(config.get().debug_logging.clone()));
