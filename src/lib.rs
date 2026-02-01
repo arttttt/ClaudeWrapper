@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod clipboard;
 pub mod config;
 pub mod ipc;
 pub mod metrics;

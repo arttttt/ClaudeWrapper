@@ -1,10 +1,11 @@
+use crate::clipboard::{ClipboardContent, ClipboardHandler};
 use crate::config::{Config, ConfigStore, ConfigWatcher};
 use crate::ipc::IpcLayer;
 use crate::proxy::ProxyServer;
 use crate::pty::{parse_command, PtySession};
 use crate::ui::app::{App, UiCommand};
 use crate::ui::events::{AppEvent, EventHandler};
-use crate::ui::input::handle_key;
+use crate::ui::input::{handle_key, InputAction};
 use crate::ui::layout::body_rect;
 use crate::ui::render::draw;
 use crate::ui::terminal_guard::setup_terminal;
@@ -100,6 +101,9 @@ pub fn run() -> io::Result<()> {
         app.on_resize(body.width.max(1), body.height.max(1));
     }
 
+    // Initialize clipboard handler (may fail on headless systems)
+    let mut clipboard = ClipboardHandler::new().ok();
+
     loop {
         terminal.draw(|frame| draw(frame, &app))?;
         if app.should_quit() {
@@ -107,8 +111,14 @@ pub fn run() -> io::Result<()> {
         }
 
         match events.next(tick_rate) {
-            Ok(AppEvent::Input(key)) => handle_key(&mut app, key),
+            Ok(AppEvent::Input(key)) => {
+                let action = handle_key(&mut app, key);
+                if action == InputAction::ImagePaste {
+                    handle_image_paste(&mut app, &mut clipboard);
+                }
+            }
             Ok(AppEvent::Paste(text)) => app.on_paste(&text),
+            Ok(AppEvent::ImagePaste(path)) => app.on_image_paste(&path),
             Ok(AppEvent::Tick) => {
                 app.on_tick();
                 if app.should_refresh_status(STATUS_REFRESH_INTERVAL) {
@@ -223,5 +233,23 @@ async fn run_ui_bridge(
                 }
             },
         }
+    }
+}
+
+/// Handle image paste request by checking clipboard for image content.
+fn handle_image_paste(app: &mut App, clipboard: &mut Option<ClipboardHandler>) {
+    let Some(clip) = clipboard else {
+        return;
+    };
+
+    match clip.get_content() {
+        ClipboardContent::Image(path) => {
+            app.on_image_paste(&path);
+        }
+        ClipboardContent::Text(text) => {
+            // Fall back to text paste if no image
+            app.on_paste(&text);
+        }
+        ClipboardContent::Empty => {}
     }
 }
