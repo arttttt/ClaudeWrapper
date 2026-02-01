@@ -1,5 +1,5 @@
 use crate::clipboard::{ClipboardContent, ClipboardHandler};
-use crate::config::{Config, ConfigStore, ConfigWatcher};
+use crate::config::{Config, ConfigStore};
 use crate::error::{ErrorCategory, ErrorSeverity};
 use crate::ipc::IpcLayer;
 use crate::proxy::{init_tracing, ProxyServer};
@@ -17,8 +17,6 @@ use std::time::Duration;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
 
-/// Default debounce delay for config file watching (milliseconds).
-const CONFIG_DEBOUNCE_MS: u64 = 200;
 const UI_COMMAND_BUFFER: usize = 32;
 const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const METRICS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
@@ -49,11 +47,8 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
         .build()
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
 
-    // Start config file watcher (if it fails, we continue without hot-reload)
-    let _config_watcher =
-        ConfigWatcher::start(config_store.clone(), events.sender(), CONFIG_DEBOUNCE_MS)
-            .map_err(|e| eprintln!("Config watcher failed to start: {}", e))
-            .ok();
+    // Config file watching removed to avoid race conditions with CLI overrides.
+    // Config is loaded once at startup and remains static for the session.
 
     let (ui_command_tx, ui_command_rx) = mpsc::channel(UI_COMMAND_BUFFER);
     let mut app = App::new(tick_rate, config_store.clone());

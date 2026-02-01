@@ -7,11 +7,11 @@
 mod auth;
 mod credentials;
 mod loader;
+mod store;
 mod types;
-mod watcher;
 
 pub use auth::{build_auth_header, AuthHeader};
 pub use credentials::{AuthType, CredentialStatus, SecureString};
 pub use loader::ConfigError;
+pub use store::ConfigStore;
 pub use types::{Backend, Config, Defaults, ProxyConfig, TerminalConfig, ThinkingConfig, ThinkingMode};
-pub use watcher::{ConfigStore, ConfigWatcher, WatcherError};
