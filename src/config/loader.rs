@@ -1,4 +1,6 @@
-use std::fs;
+use fs2::FileExt;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -57,10 +59,26 @@ impl Config {
             return Ok(Config::default());
         }
 
-        let content = fs::read_to_string(path).map_err(|e| ConfigError::ReadError {
+        // Open file and acquire shared lock for reading
+        let file = File::open(path).map_err(|e| ConfigError::ReadError {
             path: path.to_path_buf(),
             source: e,
         })?;
+
+        // Acquire shared lock (blocks until available, allows concurrent readers)
+        file.lock_shared().map_err(|e| ConfigError::ReadError {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+
+        // Read content while holding the lock
+        let mut content = String::new();
+        (&file).read_to_string(&mut content).map_err(|e| ConfigError::ReadError {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+
+        // Lock is automatically released when file is dropped
 
         let config: Config = toml::from_str(&content).map_err(|e| ConfigError::ParseError {
             path: path.to_path_buf(),
