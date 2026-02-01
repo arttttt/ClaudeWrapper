@@ -8,7 +8,7 @@ edition = "2021"
 portable-pty = "0.8"
 vt100 = "0.16"
 crossterm = { version = "0.27", features = ["event-stream"] }
-signal-hook = "0.3"
+signal-hook = "0.4"
 
 # TUI
 ratatui = "0.26"
@@ -21,13 +21,13 @@ uuid = { version = "1.20", features = ["v4"] }
 axum = { version = "0.7", features = ["json"] }
 http-body-util = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "http2"] }
-tower = "0.4"
+tower = "0.5"
 futures-core = "0.3"
 
 # Config
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
+toml = "0.9"
 dirs = "5.0"
 thiserror = "1.0"
 notify = "6.1"
