@@ -20,8 +20,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
         return InputAction::None;
     }
 
-    // Ctrl+Shift+V: paste with image support
-    if is_ctrl_shift_char(key, 'v') {
+    // Ctrl+V or Ctrl+Shift+V: paste with image support
+    // We intercept Ctrl+V because terminal can't represent image content as text.
+    // When clipboard has an image, terminal either sends empty paste or key event.
+    // By handling both Ctrl+V and Ctrl+Shift+V here, we check clipboard directly.
+    if is_ctrl_char(key, 'v') || is_ctrl_shift_char(key, 'v') {
         return InputAction::ImagePaste;
     }
 

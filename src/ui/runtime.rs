@@ -117,7 +117,14 @@ pub fn run() -> io::Result<()> {
                     handle_image_paste(&mut app, &mut clipboard);
                 }
             }
-            Ok(AppEvent::Paste(text)) => app.on_paste(&text),
+            Ok(AppEvent::Paste(text)) => {
+                if text.trim().is_empty() {
+                    // Empty paste likely means image in clipboard - check for image
+                    handle_image_paste(&mut app, &mut clipboard);
+                } else {
+                    app.on_paste(&text);
+                }
+            }
             Ok(AppEvent::ImagePaste(path)) => app.on_image_paste(&path),
             Ok(AppEvent::Tick) => {
                 app.on_tick();
