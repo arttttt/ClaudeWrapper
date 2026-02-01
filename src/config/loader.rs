@@ -1,4 +1,3 @@
-use fs2::FileExt;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -66,7 +65,7 @@ impl Config {
         })?;
 
         // Acquire shared lock (blocks until available, allows concurrent readers)
-        file.lock_shared().map_err(|e| ConfigError::ReadError {
+        fs2::FileExt::lock_shared(&file).map_err(|e| ConfigError::ReadError {
             path: path.to_path_buf(),
             source: e,
         })?;
