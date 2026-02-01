@@ -3,7 +3,7 @@ use crate::error::ErrorRegistry;
 use crate::ipc::{BackendInfo, ProxyStatus};
 use crate::metrics::MetricsSnapshot;
 use crate::pty::PtyHandle;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use termwiz::surface::Surface;
@@ -135,6 +135,38 @@ impl App {
             return;
         };
         let _ = pty.send_input(&bytes);
+    }
+
+    /// Handle mouse events - forward using SGR (1006) mouse protocol.
+    ///
+    /// SGR format: ESC [ < Cb ; Cx ; Cy M (press) or m (release)
+    /// This is the modern format that handles large coordinates.
+    pub fn on_mouse(&mut self, mouse: MouseEvent) {
+        const HEADER_HEIGHT: u16 = 3;
+
+        let Some(pty) = &self.pty else {
+            return;
+        };
+
+        // Adjust coordinates for header offset (1-based for SGR)
+        let row = mouse.row.saturating_sub(HEADER_HEIGHT) + 1;
+        let col = mouse.column + 1;
+
+        // SGR button codes: 64 = scroll up, 65 = scroll down
+        let (button, suffix) = match mouse.kind {
+            MouseEventKind::ScrollUp => (64, 'M'),
+            MouseEventKind::ScrollDown => (65, 'M'),
+            MouseEventKind::Down(btn) => (mouse_button_code(btn), 'M'),
+            MouseEventKind::Up(btn) => (mouse_button_code(btn), 'm'),
+            MouseEventKind::Drag(btn) => (mouse_button_code(btn) + 32, 'M'),
+            MouseEventKind::Moved => (35, 'M'), // Motion with no button
+            MouseEventKind::ScrollLeft => (66, 'M'),
+            MouseEventKind::ScrollRight => (67, 'M'),
+        };
+
+        // SGR format: ESC [ < button ; col ; row M/m
+        let seq = format!("\x1b[<{};{};{}{}", button, col, row, suffix);
+        let _ = pty.send_input(seq.as_bytes());
     }
 
     pub fn on_paste(&mut self, text: &str) {
@@ -391,5 +423,15 @@ fn key_event_to_bytes(key: KeyEvent) -> Option<Vec<u8>> {
         KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
         KeyCode::Insert => Some(b"\x1b[2~".to_vec()),
         _ => None,
+    }
+}
+
+/// Convert crossterm MouseButton to SGR button code.
+fn mouse_button_code(button: crossterm::event::MouseButton) -> u8 {
+    use crossterm::event::MouseButton;
+    match button {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
     }
 }

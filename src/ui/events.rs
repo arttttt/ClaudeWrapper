@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyEvent};
+use crossterm::event::{self, Event, KeyEvent, MouseEvent};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -45,6 +45,7 @@ impl PtyError {
 
 pub enum AppEvent {
     Input(KeyEvent),
+    Mouse(MouseEvent),
     Paste(String),
     /// Image paste: data URI
     ImagePaste(String),
@@ -91,6 +92,9 @@ impl EventHandler {
                     match event::read() {
                         Ok(Event::Key(key)) => {
                             let _ = event_tx.send(AppEvent::Input(key));
+                        }
+                        Ok(Event::Mouse(mouse)) => {
+                            let _ = event_tx.send(AppEvent::Mouse(mouse));
                         }
                         Ok(Event::Paste(text)) => {
                             let _ = event_tx.send(AppEvent::Paste(text));

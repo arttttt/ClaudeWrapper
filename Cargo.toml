@@ -45,6 +45,7 @@ base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"] }
 anyhow = "1.0.100"
+num-traits = "0.2.19"
 
 [dev-dependencies]
 tempfile = "3.24"

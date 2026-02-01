@@ -260,6 +260,7 @@ dependencies = [
  "image",
  "libc",
  "notify",
+ "num-traits",
  "portable-pty",
  "ratatui",
  "reqwest",

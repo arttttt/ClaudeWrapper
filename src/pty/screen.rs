@@ -264,7 +264,7 @@ fn erase_entire_line(screen: &Surface, changes: &mut Vec<Change>) {
 }
 
 fn translate_mode(mode: Mode, changes: &mut Vec<Change>) {
-    match mode {
+    match &mode {
         Mode::SetDecPrivateMode(DecPrivateMode::Code(DecPrivateModeCode::ShowCursor))
         | Mode::SetMode(TerminalMode::Code(TerminalModeCode::ShowCursor)) => {
             changes.push(Change::CursorVisibility(CursorVisibility::Visible));
@@ -273,8 +273,53 @@ fn translate_mode(mode: Mode, changes: &mut Vec<Change>) {
         | Mode::ResetMode(TerminalMode::Code(TerminalModeCode::ShowCursor)) => {
             changes.push(Change::CursorVisibility(CursorVisibility::Hidden));
         }
+        // Forward mouse mode sequences to real terminal
+        Mode::SetDecPrivateMode(dec_mode) | Mode::ResetDecPrivateMode(dec_mode) => {
+            if is_mouse_mode(dec_mode) {
+                forward_mode_to_terminal(&mode);
+            }
+        }
         _ => {}
     }
+}
+
+/// Check if a DecPrivateMode is related to mouse tracking.
+fn is_mouse_mode(mode: &DecPrivateMode) -> bool {
+    match mode {
+        DecPrivateMode::Code(code) => matches!(
+            code,
+            DecPrivateModeCode::MouseTracking           // 1000 - X10 mouse
+                | DecPrivateModeCode::HighlightMouseTracking // 1001
+                | DecPrivateModeCode::ButtonEventMouse  // 1002
+                | DecPrivateModeCode::AnyEventMouse     // 1003
+                | DecPrivateModeCode::SGRMouse          // 1006 - SGR mouse
+        ),
+        DecPrivateMode::Unspecified(n) => {
+            // Mouse-related modes: 1000-1006
+            (1000..=1006).contains(n)
+        }
+    }
+}
+
+/// Forward a mode escape sequence to the real terminal.
+fn forward_mode_to_terminal(mode: &Mode) {
+    let seq = match mode {
+        Mode::SetDecPrivateMode(dec) => format_dec_private_mode(dec, 'h'),
+        Mode::ResetDecPrivateMode(dec) => format_dec_private_mode(dec, 'l'),
+        _ => return,
+    };
+    let _ = std::io::stdout().write_all(seq.as_bytes());
+    let _ = std::io::stdout().flush();
+}
+
+/// Format a DEC private mode as an escape sequence.
+fn format_dec_private_mode(mode: &DecPrivateMode, suffix: char) -> String {
+    use num_traits::ToPrimitive;
+    let code = match mode {
+        DecPrivateMode::Code(c) => c.to_u16().unwrap_or(0),
+        DecPrivateMode::Unspecified(n) => *n,
+    };
+    format!("\x1b[?{}{}", code, suffix)
 }
 
 fn translate_esc(
