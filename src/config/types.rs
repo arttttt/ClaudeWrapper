@@ -122,7 +122,7 @@ impl Default for Backend {
             name: "claude".to_string(),
             display_name: "Claude".to_string(),
             base_url: "https://api.anthropic.com".to_string(),
-            auth_type_str: "api_key".to_string(),
+            auth_type_str: "passthrough".to_string(),
             api_key: None,
             models: vec!["claude-sonnet-4-20250514".to_string()],
         }

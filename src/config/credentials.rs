@@ -12,18 +12,18 @@ pub enum AuthType {
     ApiKey,
     /// Standard `Authorization: Bearer` header.
     Bearer,
-    /// No authentication required.
-    None,
+    /// Passthrough: forward original client headers unchanged (for OAuth).
+    Passthrough,
 }
 
 impl AuthType {
     /// Parse auth type from string.
-    /// Defaults to `ApiKey` for unknown values.
+    /// Defaults to `Passthrough` for unknown values (safe default for Anthropic OAuth).
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
+            "api_key" => AuthType::ApiKey,
             "bearer" => AuthType::Bearer,
-            "none" => AuthType::None,
-            _ => AuthType::ApiKey,
+            _ => AuthType::Passthrough,
         }
     }
 }
@@ -87,7 +87,7 @@ impl Backend {
     /// of credentials when environment variables change.
     pub fn resolve_credential(&self) -> CredentialStatus {
         match self.auth_type() {
-            AuthType::None => CredentialStatus::NoAuth,
+            AuthType::Passthrough => CredentialStatus::NoAuth,
             AuthType::ApiKey | AuthType::Bearer => {
                 if let Some(ref key) = self.api_key {
                     if !key.is_empty() {
@@ -117,12 +117,14 @@ mod tests {
     #[test]
     fn test_auth_type_parsing() {
         assert_eq!(AuthType::from_str("api_key"), AuthType::ApiKey);
+        assert_eq!(AuthType::from_str("API_KEY"), AuthType::ApiKey);
         assert_eq!(AuthType::from_str("bearer"), AuthType::Bearer);
         assert_eq!(AuthType::from_str("Bearer"), AuthType::Bearer);
-        assert_eq!(AuthType::from_str("none"), AuthType::None);
-        assert_eq!(AuthType::from_str("NONE"), AuthType::None);
-        assert_eq!(AuthType::from_str("unknown"), AuthType::ApiKey);
-        assert_eq!(AuthType::from_str(""), AuthType::ApiKey);
+        assert_eq!(AuthType::from_str("passthrough"), AuthType::Passthrough);
+        assert_eq!(AuthType::from_str("PASSTHROUGH"), AuthType::Passthrough);
+        // Unknown values default to Passthrough (safe for OAuth)
+        assert_eq!(AuthType::from_str("unknown"), AuthType::Passthrough);
+        assert_eq!(AuthType::from_str(""), AuthType::Passthrough);
     }
 
     #[test]
@@ -144,12 +146,12 @@ mod tests {
     }
 
     #[test]
-    fn test_credential_resolution_no_auth() {
+    fn test_credential_resolution_passthrough() {
         let backend = Backend {
             name: "test".to_string(),
             display_name: "Test".to_string(),
             base_url: "https://example.com".to_string(),
-            auth_type_str: "none".to_string(),
+            auth_type_str: "passthrough".to_string(),
             api_key: None,
             models: vec![],
         };

@@ -25,7 +25,7 @@ pub fn build_auth_header(backend: &Backend) -> Option<AuthHeader> {
             "Authorization".to_string(),
             format!("Bearer {}", key.expose()),
         )),
-        (AuthType::None, _) => None,
+        (AuthType::Passthrough, _) => None,
         (_, CredentialStatus::Unconfigured { .. }) => None,
         (_, CredentialStatus::NoAuth) => None,
     }
@@ -47,8 +47,8 @@ mod tests {
     }
 
     #[test]
-    fn test_no_auth_backend() {
-        let backend = make_backend("none", None);
+    fn test_passthrough_backend() {
+        let backend = make_backend("passthrough", None);
         assert!(build_auth_header(&backend).is_none());
     }
 

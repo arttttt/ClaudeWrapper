@@ -23,7 +23,7 @@ fn test_config_default_values() {
     assert_eq!(backend.name, "claude");
     assert_eq!(backend.display_name, "Claude");
     assert_eq!(backend.base_url, "https://api.anthropic.com");
-    assert_eq!(backend.auth_type(), AuthType::ApiKey);
+    assert_eq!(backend.auth_type(), AuthType::Passthrough);
     assert!(backend.api_key.is_none());
     assert_eq!(backend.models, vec!["claude-sonnet-4-20250514"]);
 }
@@ -180,14 +180,14 @@ fn test_backend_not_configured_without_api_key() {
     assert!(!backend.is_configured());
 }
 
-/// Test that backend with auth_type "none" is always configured.
+/// Test that backend with auth_type "passthrough" is always configured.
 #[test]
-fn test_backend_no_auth_always_configured() {
+fn test_backend_passthrough_always_configured() {
     let backend = Backend {
         name: "test".to_string(),
         display_name: "Test".to_string(),
         base_url: "https://example.com".to_string(),
-        auth_type_str: "none".to_string(),
+        auth_type_str: "passthrough".to_string(),
         api_key: None,
         models: vec![],
     };
@@ -311,10 +311,10 @@ fn test_configured_backends_filters_correctly() {
                 models: vec![],
             },
             Backend {
-                name: "no-auth".to_string(),
-                display_name: "No Auth".to_string(),
+                name: "passthrough".to_string(),
+                display_name: "Passthrough".to_string(),
                 base_url: "https://example.com".to_string(),
-                auth_type_str: "none".to_string(),
+                auth_type_str: "passthrough".to_string(),
                 api_key: None,
                 models: vec![],
             },
@@ -323,9 +323,9 @@ fn test_configured_backends_filters_correctly() {
 
     let configured = config.configured_backends();
 
-    // Should have 2 configured backends (one with key, one with no-auth)
+    // Should have 2 configured backends (one with key, one with passthrough)
     assert_eq!(configured.len(), 2);
     assert!(configured.iter().any(|b| b.name == "configured"));
-    assert!(configured.iter().any(|b| b.name == "no-auth"));
+    assert!(configured.iter().any(|b| b.name == "passthrough"));
     assert!(!configured.iter().any(|b| b.name == "unconfigured"));
 }
