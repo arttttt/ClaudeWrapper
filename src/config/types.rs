@@ -136,12 +136,6 @@ pub enum DebugLogRotationMode {
 /// - `Strip` (recommended): Remove thinking blocks entirely. Simple and compatible.
 /// - `Summarize` (future): Keep native during work, summarize on backend switch.
 /// - `Native` (future): Keep native format, requires handoff on switch.
-///
-/// # Deprecated modes
-///
-/// - `DropSignature`: Use `Strip` instead
-/// - `ConvertToText`: Use `Strip` instead
-/// - `ConvertToTags`: Use `Strip` instead (caused context accumulation)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingMode {
@@ -151,17 +145,6 @@ pub enum ThinkingMode {
     Summarize,
     /// Keep native format with handoff on switch (future)
     Native,
-
-    // Legacy modes - deprecated, will be removed
-    /// Deprecated: use `strip` instead
-    #[serde(alias = "drop_signature")]
-    DropSignature,
-    /// Deprecated: use `strip` instead
-    #[serde(alias = "convert_to_text")]
-    ConvertToText,
-    /// Deprecated: use `strip` instead (caused issues)
-    #[serde(alias = "convert_to_tags")]
-    ConvertToTags,
 }
 
 fn default_connect_timeout() -> u32 {

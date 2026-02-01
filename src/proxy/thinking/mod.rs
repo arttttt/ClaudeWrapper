@@ -75,27 +75,6 @@ impl TransformerRegistry {
                 );
                 Arc::new(StripTransformer)
             }
-
-            // Legacy modes - deprecated, fall back to strip with warning
-            ThinkingMode::DropSignature => {
-                tracing::warn!(
-                    "ThinkingMode::DropSignature is deprecated, using Strip instead"
-                );
-                Arc::new(StripTransformer)
-            }
-            ThinkingMode::ConvertToText => {
-                tracing::warn!(
-                    "ThinkingMode::ConvertToText is deprecated, using Strip instead"
-                );
-                Arc::new(StripTransformer)
-            }
-            ThinkingMode::ConvertToTags => {
-                tracing::warn!(
-                    "ThinkingMode::ConvertToTags is deprecated, using Strip instead. \
-                     This mode caused context accumulation issues."
-                );
-                Arc::new(StripTransformer)
-            }
         }
     }
 
@@ -162,9 +141,10 @@ mod tests {
         let registry = TransformerRegistry::new(ThinkingMode::Strip);
         assert_eq!(registry.current_mode(), ThinkingMode::Strip);
 
-        // Hot swap (currently both map to Strip, but the mechanism works)
-        registry.update_mode(ThinkingMode::DropSignature).await;
-        // Mode changed but transformer is still Strip (deprecated fallback)
+        // Hot swap to Summarize (currently falls back to Strip, but mechanism works)
+        registry.update_mode(ThinkingMode::Summarize).await;
+        assert_eq!(registry.current_mode(), ThinkingMode::Summarize);
+        // Transformer is still Strip (Summarize not yet implemented)
         let transformer = registry.get().await;
         assert_eq!(transformer.name(), "strip");
     }

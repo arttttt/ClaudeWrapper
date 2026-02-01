@@ -139,10 +139,10 @@ async fn test_glm_with_thinking_no_signature() {
 
             if status == 400 {
                 println!("\n==> GLM REJECTS thinking without signature (400 error)");
-                println!("    This means we MUST convert thinking to text format");
+                println!("    This means we MUST strip thinking blocks entirely");
             } else if status == 200 {
                 println!("\n==> GLM ACCEPTS thinking without signature (200 OK)");
-                println!("    This means DropSignature mode will work");
+                println!("    Thinking blocks without signature are accepted");
             } else {
                 println!("\n==> Unexpected status code: {}", status);
             }
@@ -155,7 +155,7 @@ async fn test_glm_with_thinking_no_signature() {
 
 /// Test: Send thinking converted to text block
 ///
-/// This tests the ConvertToText approach - replacing thinking with plain text.
+/// This tests replacing thinking blocks with plain text.
 #[tokio::test]
 #[ignore = "requires GLM_API_KEY"]
 async fn test_glm_with_thinking_as_text() {
@@ -196,7 +196,7 @@ async fn test_glm_with_thinking_as_text() {
 
             if status == 200 {
                 println!("\n==> GLM ACCEPTS thinking as plain text (200 OK)");
-                println!("    ConvertToText mode is a safe fallback");
+                println!("    Converting thinking to text is a viable approach");
             } else {
                 println!("\n==> Unexpected status: {}", status);
             }
@@ -209,7 +209,7 @@ async fn test_glm_with_thinking_as_text() {
 
 /// Test: Send thinking with <think> tags
 ///
-/// This tests the ConvertToTags approach.
+/// This tests wrapping thinking content in XML-style tags.
 #[tokio::test]
 #[ignore = "requires GLM_API_KEY"]
 async fn test_glm_with_think_tags() {
