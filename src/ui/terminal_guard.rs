@@ -1,13 +1,12 @@
 use crossterm::cursor::{Hide, Show};
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture};
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, Clear as TermClear, ClearType, EnterAlternateScreen,
-    LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use std::io::{self, Stdout, Write};
+use std::io::{self, Stdout};
 use std::sync::{Arc, Mutex};
 
 pub struct TerminalGuard {
@@ -60,9 +59,7 @@ pub fn setup_terminal() -> io::Result<(Terminal<CrosstermBackend<Stdout>>, Termi
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
     stdout.execute(EnableBracketedPaste)?;
-    stdout.execute(TermClear(ClearType::All))?;
-    stdout.write_all(b"\x1b[3J")?;
-    stdout.flush()?;
+    stdout.execute(EnableMouseCapture)?;
     stdout.execute(Hide)?;
 
     let backend = CrosstermBackend::new(stdout);
@@ -71,6 +68,7 @@ pub fn setup_terminal() -> io::Result<(Terminal<CrosstermBackend<Stdout>>, Termi
     guard.set_cleanup(|| {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
+        let _ = stdout.execute(DisableMouseCapture);
         let _ = stdout.execute(DisableBracketedPaste);
         let _ = stdout.execute(LeaveAlternateScreen);
         let _ = stdout.execute(Show);

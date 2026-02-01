@@ -14,7 +14,6 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use termwiz::surface::CursorVisibility;
 
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let area = frame.size();
@@ -26,14 +25,16 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         header,
     );
     frame.render_widget(Clear, body);
-    if let Some(screen) = app.screen() {
-        frame.render_widget(TerminalBody::new(Arc::clone(&screen)), body);
-        if app.focus_is_terminal() && body.width > 0 && body.height > 0 {
-            if let Ok(screen) = screen.lock() {
-                if screen.cursor_visibility() == CursorVisibility::Visible {
-                    let (x, y) = screen.cursor_position();
-                    let x = body.x + x.min(body.width.saturating_sub(1) as usize) as u16;
-                    let y = body.y + y.min(body.height.saturating_sub(1) as usize) as u16;
+    if let Some(parser) = app.parser() {
+        frame.render_widget(TerminalBody::new(Arc::clone(&parser)), body);
+        // Only show cursor when in live view (scrollback == 0) and terminal has focus
+        if app.focus_is_terminal() && app.scrollback() == 0 && body.width > 0 && body.height > 0 {
+            if let Ok(parser) = parser.lock() {
+                let screen = parser.screen();
+                if !screen.hide_cursor() {
+                    let cursor = screen.cursor_position();
+                    let x = body.x + (cursor.1 as u16).min(body.width.saturating_sub(1));
+                    let y = body.y + (cursor.0 as u16).min(body.height.saturating_sub(1));
                     frame.set_cursor(x, y);
                 }
             }

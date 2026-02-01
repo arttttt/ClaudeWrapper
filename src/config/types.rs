@@ -8,6 +8,8 @@ pub struct Config {
     pub proxy: ProxyConfig,
     #[serde(default)]
     pub thinking: ThinkingConfig,
+    #[serde(default)]
+    pub terminal: TerminalConfig,
     pub backends: Vec<Backend>,
 }
 
@@ -56,6 +58,14 @@ pub struct ThinkingConfig {
     pub mode: ThinkingMode,
 }
 
+/// Terminal display settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalConfig {
+    /// Number of lines to keep in scrollback buffer.
+    #[serde(default = "default_scrollback_lines")]
+    pub scrollback_lines: usize,
+}
+
 /// Handling mode for thinking blocks when switching backends.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -87,6 +97,10 @@ fn default_max_retries() -> u32 {
 
 fn default_retry_backoff_base_ms() -> u64 {
     100
+}
+
+fn default_scrollback_lines() -> usize {
+    10_000
 }
 
 fn default_proxy_bind_addr() -> String {
@@ -147,6 +161,7 @@ impl Default for Config {
             defaults: Defaults::default(),
             proxy: ProxyConfig::default(),
             thinking: ThinkingConfig::default(),
+            terminal: TerminalConfig::default(),
             backends: vec![Backend::default()],
         }
     }
@@ -172,5 +187,13 @@ impl Default for ThinkingConfig {
 impl Default for ThinkingMode {
     fn default() -> Self {
         ThinkingMode::DropSignature
+    }
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            scrollback_lines: default_scrollback_lines(),
+        }
     }
 }

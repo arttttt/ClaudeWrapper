@@ -1,31 +1,23 @@
 use crate::pty::hotkey::is_wrapper_hotkey;
 use crate::pty::resize::ResizeWatcher;
-use crate::pty::vt::VtParser;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size as terminal_size};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::error::Error;
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use termwiz::surface::Surface;
 
 pub struct PtyManager {
-    vt_parser: VtParser,
-    screen: Arc<Mutex<Surface>>,
+    parser: Arc<Mutex<vt100::Parser>>,
 }
 
 impl PtyManager {
     pub fn new() -> Self {
         let (cols, rows) = terminal_size().unwrap_or((80, 24));
-        let screen = Surface::new(usize::from(cols), usize::from(rows));
+        let parser = vt100::Parser::new(rows, cols, 0);
         Self {
-            vt_parser: VtParser::new(),
-            screen: Arc::new(Mutex::new(screen)),
+            parser: Arc::new(Mutex::new(parser)),
         }
-    }
-
-    pub fn parse_output(&mut self, bytes: &[u8]) -> Vec<termwiz::escape::Action> {
-        self.vt_parser.parse(bytes)
     }
 
     pub fn run_command(
@@ -41,7 +33,7 @@ impl PtyManager {
             pixel_width: 0,
             pixel_height: 0,
         })?;
-        self.resize_screen(cols, rows);
+        self.resize_parser(cols, rows);
 
         let mut cmd = CommandBuilder::new(command);
         cmd.args(args);
@@ -57,7 +49,7 @@ impl PtyManager {
         let writer = master.take_writer()?;
         let resize_master = Arc::new(Mutex::new(master));
         let resize_watcher =
-            ResizeWatcher::start(Arc::clone(&resize_master), Arc::clone(&self.screen))?;
+            ResizeWatcher::start(Arc::clone(&resize_master), Arc::clone(&self.parser))?;
 
         let reader_handle = thread::spawn(move || {
             let mut reader = reader;
@@ -113,9 +105,9 @@ impl PtyManager {
         std::process::exit(status.exit_code() as i32);
     }
 
-    fn resize_screen(&self, cols: u16, rows: u16) {
-        if let Ok(mut screen) = self.screen.lock() {
-            screen.resize(usize::from(cols), usize::from(rows));
+    fn resize_parser(&self, cols: u16, rows: u16) {
+        if let Ok(mut parser) = self.parser.lock() {
+            parser.screen_mut().set_size(rows, cols);
         }
     }
 }

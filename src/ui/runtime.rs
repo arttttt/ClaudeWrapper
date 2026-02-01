@@ -6,7 +6,7 @@ use crate::proxy::{init_tracing, ProxyServer};
 use crate::pty::{parse_command, PtySession};
 use crate::shutdown::{ShutdownCoordinator, ShutdownPhase};
 use crate::ui::app::{App, UiCommand};
-use crate::ui::events::{AppEvent, EventHandler};
+use crate::ui::events::{mouse_scroll_direction, AppEvent, EventHandler};
 use crate::ui::input::{handle_key, InputAction};
 use crate::ui::layout::body_rect;
 use crate::ui::render::draw;
@@ -104,7 +104,8 @@ pub fn run() -> io::Result<()> {
     let env = vec![
         ("ANTHROPIC_BASE_URL".to_string(), proxy_base_url),
     ];
-    let mut pty_session = PtySession::spawn(command, args, env, events.sender())
+    let scrollback_lines = config_store.get().terminal.scrollback_lines;
+    let mut pty_session = PtySession::spawn(command, args, env, scrollback_lines, events.sender())
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
     app.attach_pty(pty_session.handle());
     if let Ok((cols, rows)) = crossterm::terminal::size() {
@@ -128,9 +129,20 @@ pub fn run() -> io::Result<()> {
 
         match events.next(tick_rate) {
             Ok(AppEvent::Input(key)) => {
+                // Reset scrollback to live view on any key input
+                app.reset_scrollback();
                 let action = handle_key(&mut app, key);
                 if action == InputAction::ImagePaste {
                     handle_image_paste(&mut app, &mut clipboard);
+                }
+            }
+            Ok(AppEvent::Mouse(mouse)) => {
+                if let Some((scroll_up, lines)) = mouse_scroll_direction(&mouse) {
+                    if scroll_up {
+                        app.scroll_up(lines);
+                    } else {
+                        app.scroll_down(lines);
+                    }
                 }
             }
             Ok(AppEvent::Paste(text)) => {

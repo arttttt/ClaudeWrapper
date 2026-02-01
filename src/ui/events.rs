@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyEvent};
+use crossterm::event::{self, Event, KeyEvent, MouseEvent, MouseEventKind};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -45,6 +45,7 @@ impl PtyError {
 
 pub enum AppEvent {
     Input(KeyEvent),
+    Mouse(MouseEvent),
     Paste(String),
     /// Image paste: data URI
     ImagePaste(String),
@@ -92,6 +93,9 @@ impl EventHandler {
                         Ok(Event::Key(key)) => {
                             let _ = event_tx.send(AppEvent::Input(key));
                         }
+                        Ok(Event::Mouse(mouse)) => {
+                            let _ = event_tx.send(AppEvent::Mouse(mouse));
+                        }
                         Ok(Event::Paste(text)) => {
                             let _ = event_tx.send(AppEvent::Paste(text));
                         }
@@ -119,5 +123,15 @@ impl EventHandler {
 
     pub fn sender(&self) -> mpsc::Sender<AppEvent> {
         self.tx.clone()
+    }
+}
+
+/// Extract scroll direction from mouse event.
+/// Returns Some((up, lines)) where up=true means scroll up (view older content).
+pub fn mouse_scroll_direction(event: &MouseEvent) -> Option<(bool, usize)> {
+    match event.kind {
+        MouseEventKind::ScrollUp => Some((true, 3)),
+        MouseEventKind::ScrollDown => Some((false, 3)),
+        _ => None,
     }
 }

@@ -1,6 +1,5 @@
 #[cfg(unix)]
 mod pty_passthrough {
-    use claudewrapper::pty::vt::VtParser;
     use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
     use std::error::Error;
     use std::io::{Read, Write};
@@ -199,12 +198,12 @@ mod pty_passthrough {
     #[test]
     #[ignore]
     fn benchmark_vt_rendering() {
-        let mut parser = VtParser::new();
+        let mut parser = vt100::Parser::new(24, 80, 0);
         let payload = b"\x1b[2J\x1b[HThe quick brown fox jumps over the lazy dog\n";
         let iterations = 20_000;
         let start = Instant::now();
         for _ in 0..iterations {
-            let _ = parser.parse(payload);
+            parser.process(payload);
         }
         let elapsed = start.elapsed();
         let per_sec = iterations as f64 / elapsed.as_secs_f64();

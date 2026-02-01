@@ -3,30 +3,29 @@ use portable_pty::{MasterPty, PtySize};
 use std::error::Error;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
-use termwiz::surface::Surface;
 
 #[derive(Clone)]
 pub struct PtyHandle {
-    screen: Arc<Mutex<Surface>>,
+    parser: Arc<Mutex<vt100::Parser>>,
     writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
 }
 
 impl PtyHandle {
     pub fn new(
-        screen: Arc<Mutex<Surface>>,
+        parser: Arc<Mutex<vt100::Parser>>,
         writer: Box<dyn Write + Send>,
         master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     ) -> Self {
         Self {
-            screen,
+            parser,
             writer: Arc::new(Mutex::new(Some(writer))),
             master,
         }
     }
 
-    pub fn screen(&self) -> Arc<Mutex<Surface>> {
-        Arc::clone(&self.screen)
+    pub fn parser(&self) -> Arc<Mutex<vt100::Parser>> {
+        Arc::clone(&self.parser)
     }
 
     pub fn send_input(&self, bytes: &[u8]) -> io::Result<()> {
@@ -62,10 +61,46 @@ impl PtyHandle {
         if let Ok(master) = self.master.lock() {
             master.resize(size)?;
         }
-        if let Ok(mut screen) = self.screen.lock() {
-            screen.resize(usize::from(cols), usize::from(rows));
+        if let Ok(mut parser) = self.parser.lock() {
+            parser.screen_mut().set_size(rows, cols);
         }
         Ok(())
+    }
+
+    /// Get the current scrollback offset.
+    pub fn scrollback(&self) -> usize {
+        self.parser
+            .lock()
+            .map(|p| p.screen().scrollback())
+            .unwrap_or(0)
+    }
+
+    /// Set the scrollback offset.
+    pub fn set_scrollback(&self, offset: usize) {
+        if let Ok(mut parser) = self.parser.lock() {
+            parser.screen_mut().set_scrollback(offset);
+        }
+    }
+
+    /// Scroll up by the given number of lines.
+    pub fn scroll_up(&self, lines: usize) {
+        if let Ok(mut parser) = self.parser.lock() {
+            let current = parser.screen().scrollback();
+            parser.screen_mut().set_scrollback(current.saturating_add(lines));
+        }
+    }
+
+    /// Scroll down by the given number of lines.
+    pub fn scroll_down(&self, lines: usize) {
+        if let Ok(mut parser) = self.parser.lock() {
+            let current = parser.screen().scrollback();
+            parser.screen_mut().set_scrollback(current.saturating_sub(lines));
+        }
+    }
+
+    /// Reset scrollback to show current (live) content.
+    pub fn reset_scrollback(&self) {
+        self.set_scrollback(0);
     }
 
     pub fn close_writer(&self) {

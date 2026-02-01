@@ -290,6 +290,7 @@ mod tests {
             },
             proxy: crate::config::ProxyConfig::default(),
             thinking: crate::config::ThinkingConfig::default(),
+            terminal: crate::config::TerminalConfig::default(),
             backends: vec![
                 Backend {
                     name: "backend1".to_string(),
@@ -297,7 +298,7 @@ mod tests {
                     base_url: "https://api1.example.com".to_string(),
                     auth_type_str: "api_key".to_string(),
                     api_key: None,
-                    
+
                 },
                 Backend {
                     name: "backend2".to_string(),
@@ -305,7 +306,7 @@ mod tests {
                     base_url: "https://api2.example.com".to_string(),
                     auth_type_str: "bearer".to_string(),
                     api_key: None,
-                    
+
                 },
             ],
         }

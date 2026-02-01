@@ -2,7 +2,6 @@ use portable_pty::{MasterPty, PtySize};
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use termwiz::surface::Surface;
 
 #[cfg(unix)]
 use crossterm::terminal::size as terminal_size;
@@ -21,7 +20,7 @@ pub struct ResizeWatcher {
 impl ResizeWatcher {
     pub fn start(
         master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-        screen: Arc<Mutex<Surface>>,
+        parser: Arc<Mutex<vt100::Parser>>,
     ) -> Result<Option<Self>, Box<dyn Error>> {
         #[cfg(unix)]
         {
@@ -42,8 +41,8 @@ impl ResizeWatcher {
                     if let Ok(master) = master.lock() {
                         let _ = master.resize(size);
                     }
-                    if let Ok(mut screen) = screen.lock() {
-                        screen.resize(usize::from(cols), usize::from(rows));
+                    if let Ok(mut parser) = parser.lock() {
+                        parser.screen_mut().set_size(rows, cols);
                     }
                 }
             });
@@ -53,7 +52,7 @@ impl ResizeWatcher {
         #[cfg(not(unix))]
         {
             let _ = master;
-            let _ = screen;
+            let _ = parser;
             Ok(None)
         }
     }

@@ -6,7 +6,6 @@ use crate::pty::PtyHandle;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use termwiz::surface::Surface;
 use tokio::sync::mpsc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,8 +166,34 @@ impl App {
         self.pty = Some(pty);
     }
 
-    pub fn screen(&self) -> Option<Arc<Mutex<Surface>>> {
-        self.pty.as_ref().map(|pty| pty.screen())
+    pub fn parser(&self) -> Option<Arc<Mutex<vt100::Parser>>> {
+        self.pty.as_ref().map(|pty| pty.parser())
+    }
+
+    /// Scroll up (view older content).
+    pub fn scroll_up(&mut self, lines: usize) {
+        if let Some(pty) = &self.pty {
+            pty.scroll_up(lines);
+        }
+    }
+
+    /// Scroll down (view newer content).
+    pub fn scroll_down(&mut self, lines: usize) {
+        if let Some(pty) = &self.pty {
+            pty.scroll_down(lines);
+        }
+    }
+
+    /// Reset scrollback to live view.
+    pub fn reset_scrollback(&mut self) {
+        if let Some(pty) = &self.pty {
+            pty.reset_scrollback();
+        }
+    }
+
+    /// Get current scrollback offset.
+    pub fn scrollback(&self) -> usize {
+        self.pty.as_ref().map(|pty| pty.scrollback()).unwrap_or(0)
     }
 
     #[allow(dead_code)]

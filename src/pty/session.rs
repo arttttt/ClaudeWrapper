@@ -1,6 +1,4 @@
 use crate::pty::handle::PtyHandle;
-use crate::pty::screen::{apply_actions, ActionTranslator};
-use crate::pty::vt::VtParser;
 use crate::ui::events::{AppEvent, PtyError};
 use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
 use std::error::Error;
@@ -8,7 +6,6 @@ use std::io::Read;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use termwiz::surface::Surface;
 
 pub struct PtySession {
     handle: PtyHandle,
@@ -21,6 +18,7 @@ impl PtySession {
         command: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
+        scrollback_len: usize,
         notifier: Sender<AppEvent>,
     ) -> Result<Self, Box<dyn Error>> {
         let pty_system = native_pty_system();
@@ -31,9 +29,11 @@ impl PtySession {
             pixel_width: 0,
             pixel_height: 0,
         })?;
-        let screen = Arc::new(Mutex::new(Surface::new(
-            usize::from(cols),
-            usize::from(rows),
+
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(
+            rows,
+            cols,
+            scrollback_len,
         )));
 
         let mut cmd = CommandBuilder::new(command);
@@ -50,12 +50,11 @@ impl PtySession {
         let reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
         let master = Arc::new(Mutex::new(pair.master));
-        let handle = PtyHandle::new(Arc::clone(&screen), writer, master);
+        let handle = PtyHandle::new(Arc::clone(&parser), writer, master);
 
+        let reader_parser = Arc::clone(&parser);
         let reader_handle = thread::spawn(move || {
             let mut reader = reader;
-            let mut parser = VtParser::new();
-            let mut translator = ActionTranslator::new();
             let mut buffer = [0u8; 8192];
             let mut had_error = false;
 
@@ -72,9 +71,9 @@ impl PtySession {
                         break;
                     }
                 };
-                let actions = parser.parse(&buffer[..count]);
-                if let Ok(mut screen) = screen.lock() {
-                    apply_actions(&mut screen, &mut translator, actions);
+
+                if let Ok(mut parser) = reader_parser.lock() {
+                    parser.process(&buffer[..count]);
                 }
                 let _ = notifier.send(AppEvent::PtyOutput);
             }

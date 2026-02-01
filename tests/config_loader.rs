@@ -1,6 +1,6 @@
 use claudewrapper::config::{
     build_auth_header, AuthType, Backend, Config, ConfigError, CredentialStatus, Defaults,
-    ProxyConfig, ThinkingConfig,
+    ProxyConfig, TerminalConfig, ThinkingConfig,
 };
 
 /// Test that Config::default() produces the expected values per spec.
@@ -51,6 +51,7 @@ fn test_validation_fails_empty_backends() {
         defaults: Defaults::default(),
         proxy: ProxyConfig::default(),
         thinking: ThinkingConfig::default(),
+        terminal: TerminalConfig::default(),
         backends: vec![],
     };
 
@@ -81,6 +82,7 @@ fn test_validation_fails_missing_active_backend() {
         },
         proxy: ProxyConfig::default(),
         thinking: ThinkingConfig::default(),
+        terminal: TerminalConfig::default(),
         backends: vec![Backend::default()],
     };
 
@@ -248,6 +250,7 @@ fn test_validation_fails_unconfigured_active_backend() {
         },
         proxy: ProxyConfig::default(),
         thinking: ThinkingConfig::default(),
+        terminal: TerminalConfig::default(),
         backends: vec![Backend {
             name: "unconfigured".to_string(),
             display_name: "Unconfigured".to_string(),
@@ -285,6 +288,7 @@ fn test_configured_backends_filters_correctly() {
         },
         proxy: ProxyConfig::default(),
         thinking: ThinkingConfig::default(),
+        terminal: TerminalConfig::default(),
         backends: vec![
             Backend {
                 name: "configured".to_string(),

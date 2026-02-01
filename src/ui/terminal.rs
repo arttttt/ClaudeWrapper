@@ -3,119 +3,82 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::Widget;
 use std::sync::{Arc, Mutex};
-use termwiz::cell::{Blink, CellAttributes, Intensity, Underline};
-use termwiz::color::{ColorAttribute, SrgbaTuple};
-use termwiz::surface::Surface;
 
 pub struct TerminalBody {
-    screen: Arc<Mutex<Surface>>,
+    parser: Arc<Mutex<vt100::Parser>>,
 }
 
 impl TerminalBody {
-    pub fn new(screen: Arc<Mutex<Surface>>) -> Self {
-        Self { screen }
+    pub fn new(parser: Arc<Mutex<vt100::Parser>>) -> Self {
+        Self { parser }
     }
 }
 
 impl Widget for TerminalBody {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let screen = match self.screen.lock() {
-            Ok(screen) => screen,
+        let parser = match self.parser.lock() {
+            Ok(parser) => parser,
             Err(_) => return,
         };
 
+        let screen = parser.screen();
         let max_rows = area.height as usize;
         let max_cols = area.width as usize;
 
-        for (row_idx, line) in screen.screen_lines().iter().enumerate().take(max_rows) {
+        for row_idx in 0..max_rows {
             let y = area.y + row_idx as u16;
-            for cell in line.visible_cells() {
-                let col_idx = cell.cell_index();
-                if col_idx >= max_cols {
-                    continue;
-                }
-                let width = cell.width();
-                if col_idx + width > max_cols {
-                    continue;
-                }
+            for col_idx in 0..max_cols {
                 let x = area.x + col_idx as u16;
-                let style = style_from_attributes(cell.attrs());
-                let cell_ref = buf.get_mut(x, y);
-                cell_ref.set_symbol(cell.str()).set_style(style);
+                let cell = screen.cell(row_idx as u16, col_idx as u16);
+                if let Some(cell) = cell {
+                    let style = style_from_cell(cell);
+                    let symbol = cell.contents();
+                    let cell_ref = buf.get_mut(x, y);
+                    if symbol.is_empty() {
+                        cell_ref.set_symbol(" ").set_style(style);
+                    } else {
+                        cell_ref.set_symbol(&symbol).set_style(style);
+                    }
+                }
             }
         }
     }
 }
 
-fn style_from_attributes(attrs: &CellAttributes) -> Style {
+fn style_from_cell(cell: &vt100::Cell) -> Style {
     let mut style = Style::default();
 
-    if let Some(color) = color_from_attribute(attrs.foreground()) {
+    // Foreground color
+    if let Some(color) = color_from_vt100(cell.fgcolor()) {
         style = style.fg(color);
     }
-    if let Some(color) = color_from_attribute(attrs.background()) {
+
+    // Background color
+    if let Some(color) = color_from_vt100(cell.bgcolor()) {
         style = style.bg(color);
     }
 
-    match attrs.intensity() {
-        Intensity::Bold => {
-            style = style.add_modifier(Modifier::BOLD);
-        }
-        Intensity::Half => {
-            style = style.add_modifier(Modifier::DIM);
-        }
-        Intensity::Normal => {}
+    // Text attributes
+    if cell.bold() {
+        style = style.add_modifier(Modifier::BOLD);
     }
-
-    if attrs.italic() {
+    if cell.italic() {
         style = style.add_modifier(Modifier::ITALIC);
     }
-    if attrs.reverse() {
-        style = style.add_modifier(Modifier::REVERSED);
-    }
-    if attrs.strikethrough() {
-        style = style.add_modifier(Modifier::CROSSED_OUT);
-    }
-    if attrs.invisible() {
-        style = style.add_modifier(Modifier::HIDDEN);
-    }
-
-    if attrs.underline() != Underline::None {
+    if cell.underline() {
         style = style.add_modifier(Modifier::UNDERLINED);
     }
-
-    match attrs.blink() {
-        Blink::Slow => {
-            style = style.add_modifier(Modifier::SLOW_BLINK);
-        }
-        Blink::Rapid => {
-            style = style.add_modifier(Modifier::RAPID_BLINK);
-        }
-        Blink::None => {}
+    if cell.inverse() {
+        style = style.add_modifier(Modifier::REVERSED);
     }
 
     style
 }
 
-fn color_from_attribute(color: ColorAttribute) -> Option<Color> {
+fn color_from_vt100(color: vt100::Color) -> Option<Color> {
     match color {
-        ColorAttribute::Default => Some(Color::Reset),
-        ColorAttribute::PaletteIndex(idx) => Some(Color::Indexed(idx)),
-        ColorAttribute::TrueColorWithDefaultFallback(color)
-        | ColorAttribute::TrueColorWithPaletteFallback(color, _) => Some(color_from_tuple(color)),
+        vt100::Color::Default => None,
+        vt100::Color::Idx(idx) => Some(Color::Indexed(idx)),
+        vt100::Color::Rgb(r, g, b) => Some(Color::Rgb(r, g, b)),
     }
-}
-
-fn color_from_tuple(color: SrgbaTuple) -> Color {
-    let SrgbaTuple(red, green, blue, _) = color;
-    Color::Rgb(
-        float_to_channel(red),
-        float_to_channel(green),
-        float_to_channel(blue),
-    )
-}
-
-fn float_to_channel(value: f32) -> u8 {
-    let value = value.clamp(0.0, 1.0);
-    (value * 255.0).round() as u8
 }
