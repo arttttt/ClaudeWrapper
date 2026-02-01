@@ -16,6 +16,9 @@ use crate::proxy::timeout::TimeoutConfig;
 
 pub struct ProxyServer {
     pub addr: SocketAddr,
+    /// The bound listener, kept alive to prevent port race conditions.
+    /// Populated by try_bind(), consumed by run().
+    listener: Option<TcpListener>,
     router: RouterEngine,
     shutdown: Arc<ShutdownManager>,
     backend_state: BackendState,
@@ -39,6 +42,7 @@ impl ProxyServer {
         );
         Ok(Self {
             addr: SocketAddr::from(([127, 0, 0, 1], 0)), // Will be determined at bind time
+            listener: None,
             router,
             shutdown: Arc::new(ShutdownManager::new()),
             backend_state,
@@ -48,35 +52,39 @@ impl ProxyServer {
 
     /// Try to bind to the configured address, falling back to incremental ports if busy.
     /// Returns the bound address and the base URL for Claude Code.
+    ///
+    /// The listener is kept alive to prevent port race conditions - another process
+    /// cannot claim the port between try_bind() and run().
     pub async fn try_bind(&mut self, config: &ConfigStore) -> Result<(SocketAddr, String), Box<dyn std::error::Error>> {
         let bind_addr_str = config.get().proxy.bind_addr.clone();
         let base_url_template = config.get().proxy.base_url.clone();
-        
+
         // Parse the configured bind address to get the starting port
         let bind_addr: SocketAddr = bind_addr_str.parse()
             .map_err(|e| format!("Invalid bind address '{}': {}", bind_addr_str, e))?;
-        
+
         let start_port = bind_addr.port();
         let host = bind_addr.ip();
-        
+
         // Try ports from start_port up to start_port + 100
         for port in start_port..=start_port.saturating_add(100) {
             let try_addr = SocketAddr::new(host, port);
             match TcpListener::bind(try_addr).await {
                 Ok(listener) => {
                     let actual_addr = listener.local_addr()?;
-                    drop(listener); // Release the listener, we'll bind again in run()
-                    
+
                     // Build the base URL with the actual port
-                    let actual_base_url = if base_url_template.contains("localhost") || 
+                    let actual_base_url = if base_url_template.contains("localhost") ||
                                            base_url_template.contains("127.0.0.1") {
                         format!("http://127.0.0.1:{}", actual_addr.port())
                     } else {
                         base_url_template
                     };
-                    
+
                     self.addr = actual_addr;
-                    tracing::info!("Proxy will bind to {} (base_url: {})", actual_addr, actual_base_url);
+                    // Keep listener alive to prevent race conditions
+                    self.listener = Some(listener);
+                    tracing::info!("Proxy bound to {} (base_url: {})", actual_addr, actual_base_url);
                     return Ok((actual_addr, actual_base_url));
                 }
                 Err(e) => {
@@ -85,7 +93,7 @@ impl ProxyServer {
                 }
             }
         }
-        
+
         Err(format!("Could not find available port in range {}-{}", start_port, start_port + 100).into())
     }
 
@@ -107,11 +115,15 @@ impl ProxyServer {
         }
     }
 
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    /// Run the proxy server.
+    ///
+    /// Consumes self to take ownership of the pre-bound listener.
+    /// Call try_bind() before run() to bind to an available port.
+    pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+        let listener = self.listener
+            .ok_or("try_bind() must be called before run()")?;
+
         tracing::info!("Starting proxy server on {}", self.addr);
-        let listener = TcpListener::bind(self.addr).await
-            .map_err(|e| format!("Failed to bind to {}: {}", self.addr, e))?;
-        tracing::info!("Proxy server listening on {}", self.addr);
 
         let app = build_router(self.router.clone());
         let make_service = app.into_make_service();
