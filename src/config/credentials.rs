@@ -26,6 +26,14 @@ impl AuthType {
             _ => AuthType::Passthrough,
         }
     }
+
+    /// Returns true if this auth type uses its own credentials.
+    ///
+    /// When true, incoming auth headers should be stripped and replaced
+    /// with the backend's configured credentials.
+    pub fn uses_own_credentials(&self) -> bool {
+        matches!(self, AuthType::ApiKey | AuthType::Bearer)
+    }
 }
 
 /// Wrapper for sensitive strings that prevents accidental logging.
@@ -143,6 +151,16 @@ mod tests {
 
         // expose() should reveal
         assert_eq!(secret.expose(), "my-secret-key");
+    }
+
+    #[test]
+    fn test_uses_own_credentials() {
+        // Passthrough forwards client auth headers unchanged
+        assert!(!AuthType::Passthrough.uses_own_credentials());
+
+        // ApiKey and Bearer use backend's configured credentials
+        assert!(AuthType::ApiKey.uses_own_credentials());
+        assert!(AuthType::Bearer.uses_own_credentials());
     }
 
     #[test]

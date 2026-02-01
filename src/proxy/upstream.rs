@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::header::{CONTENT_TYPE, HOST};
+use axum::http::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST};
 use axum::http::{Request, Response};
 use http_body_util::BodyExt;
 use reqwest::Client;
@@ -128,7 +128,9 @@ impl UpstreamClient {
                 .write()
                 .expect("thinking tracker lock poisoned");
             tracker.set_mode(self.config.get().thinking.mode);
+
             let output = tracker.transform_request(&backend.name, &body_bytes);
+
             if output.result.changed {
                 if let Some(updated) = output.body {
                     body_bytes = updated;
@@ -138,7 +140,22 @@ impl UpstreamClient {
                     drop_count = output.result.drop_count,
                     convert_count = output.result.convert_count,
                     tag_count = output.result.tag_count,
-                    "Applied thinking compatibility transforms"
+                    "Transformed thinking blocks"
+                );
+            }
+
+            // Debug: log request body (truncated) - only when transform happened
+            if output.result.changed {
+                let body_str = String::from_utf8_lossy(&body_bytes);
+                let truncated = if body_str.len() > 4000 {
+                    format!("{}...[truncated]", &body_str[..4000])
+                } else {
+                    body_str.to_string()
+                };
+                tracing::debug!(
+                    backend = %backend.name,
+                    body = %truncated,
+                    "Request body AFTER thinking transform"
                 );
             }
         }
@@ -150,12 +167,32 @@ impl UpstreamClient {
         let upstream_resp = loop {
             let mut builder = self.client.request(method.clone(), &upstream_uri);
 
+            // Determine if we should strip incoming auth headers based on backend's auth type
+            let strip_auth_headers = backend.auth_type().uses_own_credentials();
+
             for (name, value) in headers.iter() {
-                if name != HOST {
-                    builder = builder.header(name, value);
+                // Always skip HOST and CONTENT_LENGTH - they will be set by the HTTP client
+                // CONTENT_LENGTH must be recalculated after body transformation
+                if name == HOST || name == CONTENT_LENGTH {
+                    continue;
                 }
+                // Strip auth headers when backend uses its own credentials (bearer/api_key)
+                // Passthrough mode forwards all headers unchanged
+                if strip_auth_headers {
+                    if name == AUTHORIZATION || name.as_str().eq_ignore_ascii_case("x-api-key") {
+                        tracing::debug!(
+                            header = %name,
+                            backend = %backend.name,
+                            auth_type = ?backend.auth_type(),
+                            "Stripping incoming auth header"
+                        );
+                        continue;
+                    }
+                }
+                builder = builder.header(name, value);
             }
 
+            // Add backend's own auth header (for bearer/api_key modes)
             if let Some((name, value)) = auth_header.as_ref() {
                 builder = builder.header(name, value);
             }
@@ -169,6 +206,15 @@ impl UpstreamClient {
             match send_result {
                 Ok(response) => break response,
                 Err(err) => {
+                    tracing::error!(
+                        backend = %backend.name,
+                        is_connect = err.is_connect(),
+                        is_timeout = err.is_timeout(),
+                        is_request = err.is_request(),
+                        is_body = err.is_body(),
+                        error = ?err,
+                        "Upstream request error details"
+                    );
                     let should_retry = err.is_connect() || err.is_timeout();
                     if should_retry && attempt < self.pool_config.max_retries {
                         let backoff = self
@@ -216,6 +262,17 @@ impl UpstreamClient {
 
         let status = upstream_resp.status();
         span.set_status(status.as_u16());
+
+        // Log error responses for debugging
+        if !status.is_success() {
+            tracing::warn!(
+                backend = %backend.name,
+                status = %status,
+                content_type = ?content_type,
+                "Upstream returned error status"
+            );
+        }
+
         let mut response_builder = Response::builder().status(status);
 
         for (name, value) in upstream_resp.headers() {
@@ -236,6 +293,23 @@ impl UpstreamClient {
                     return Err(err);
                 }
             };
+
+            // Log error response body for debugging
+            if !status.is_success() {
+                let body_preview = String::from_utf8_lossy(&body_bytes);
+                let truncated = if body_preview.len() > 1000 {
+                    format!("{}...[truncated]", &body_preview[..1000])
+                } else {
+                    body_preview.to_string()
+                };
+                tracing::warn!(
+                    backend = %backend.name,
+                    status = %status,
+                    body = %truncated,
+                    "Upstream error response body"
+                );
+            }
+
             span.add_response_bytes(body_bytes.len());
             observability.finish_request(span);
             Ok(response_builder.body(Body::from(body_bytes))?)

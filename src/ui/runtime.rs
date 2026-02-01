@@ -2,7 +2,7 @@ use crate::clipboard::{ClipboardContent, ClipboardHandler};
 use crate::config::{Config, ConfigStore, ConfigWatcher};
 use crate::error::{ErrorCategory, ErrorSeverity};
 use crate::ipc::IpcLayer;
-use crate::proxy::ProxyServer;
+use crate::proxy::{init_tracing, ProxyServer};
 use crate::pty::{parse_command, PtySession};
 use crate::shutdown::{ShutdownCoordinator, ShutdownPhase};
 use crate::ui::app::{App, UiCommand};
@@ -25,6 +25,9 @@ const METRICS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const BACKENDS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 pub fn run() -> io::Result<()> {
+    // Initialize tracing (file logging if CLAUDE_WRAPPER_LOG is set)
+    init_tracing();
+
     let (mut terminal, guard) = setup_terminal()?;
     let tick_rate = Duration::from_millis(250);
 

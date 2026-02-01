@@ -25,10 +25,33 @@ use crate::proxy::router::{build_router, RouterEngine};
 use crate::proxy::shutdown::ShutdownManager;
 use crate::proxy::timeout::TimeoutConfig;
 
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+
+/// Initialize tracing with optional file output.
+///
+/// If `CLAUDE_WRAPPER_LOG` env var is set, logs to that file.
+/// Otherwise logs to stdout (not suitable for TUI mode).
 pub fn init_tracing() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info"));
 
+    if let Ok(log_path) = std::env::var("CLAUDE_WRAPPER_LOG") {
+        // File logging for TUI mode
+        if let Ok(file) = std::fs::File::create(&log_path) {
+            let file_layer = fmt::layer()
+                .with_writer(file)
+                .with_ansi(false)
+                .with_target(true)
+                .with_level(true);
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(file_layer)
+                .init();
+            return;
+        }
+    }
+
+    // Default: stdout logging
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(true)
