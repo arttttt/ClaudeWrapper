@@ -12,7 +12,7 @@ use crate::ui::layout::body_rect;
 use crate::ui::render::draw;
 use crate::ui::terminal_guard::setup_terminal;
 use ratatui::layout::Rect;
-use std::io;
+use std::io::{self, Read};
 use std::time::Duration;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
@@ -25,6 +25,11 @@ const BACKENDS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Result<()> {
     // Initialize tracing (file logging if CLAUDE_WRAPPER_LOG is set)
     init_tracing();
+
+    // Buffer any input that arrives before PTY is ready
+    // This handles race condition where Gas Town sends messages immediately
+    let mut stdin_buffer = Vec::new();
+    let _ = io::stdin().read_to_end(&mut stdin_buffer);
 
     let (mut terminal, guard) = setup_terminal()?;
     let tick_rate = Duration::from_millis(250);
@@ -112,6 +117,12 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     let scrollback_lines = config_store.get().terminal.scrollback_lines;
     let mut pty_session = PtySession::spawn(command, args, env, scrollback_lines, events.sender())
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+    
+    // Write buffered stdin to PTY if any input was received before PTY was ready
+    if !stdin_buffer.is_empty() {
+        let _ = pty_session.handle().send_input(&stdin_buffer);
+    }
+    
     app.attach_pty(pty_session.handle());
     if let Ok((cols, rows)) = crossterm::terminal::size() {
         let body = body_rect(Rect {

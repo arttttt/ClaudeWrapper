@@ -4,6 +4,7 @@ use crate::ipc::{BackendInfo, ProxyStatus};
 use crate::metrics::MetricsSnapshot;
 use crate::pty::PtyHandle;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -39,6 +40,8 @@ pub struct App {
     status_message: Option<String>,
     size: Option<(u16, u16)>,
     pty: Option<PtyHandle>,
+    /// Buffer for input received before PTY is ready
+    input_buffer: VecDeque<Vec<u8>>,
     config: ConfigStore,
     error_registry: ErrorRegistry,
     ipc_sender: Option<UiCommandSender>,
@@ -63,6 +66,7 @@ impl App {
             status_message: None,
             size: None,
             pty: None,
+            input_buffer: VecDeque::new(),
             config,
             error_registry: ErrorRegistry::new(100),
             ipc_sender: None,
@@ -127,32 +131,32 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
-        let Some(pty) = &self.pty else {
-            return;
-        };
         let Some(bytes) = key_event_to_bytes(key) else {
             return;
         };
-        let _ = pty.send_input(&bytes);
+        self.send_input(&bytes);
+    }
+
+    /// Send input to PTY or buffer if not ready
+    fn send_input(&mut self, bytes: &[u8]) {
+        if let Some(pty) = &self.pty {
+            let _ = pty.send_input(bytes);
+        } else {
+            self.input_buffer.push_back(bytes.to_vec());
+        }
     }
 
     pub fn on_paste(&mut self, text: &str) {
-        let Some(pty) = &self.pty else {
-            return;
-        };
         // Send paste content wrapped in bracketed paste escape sequences
         // so the subprocess knows this is pasted content
         let bracketed = format!("\x1b[200~{}\x1b[201~", text);
-        let _ = pty.send_input(bracketed.as_bytes());
+        self.send_input(bracketed.as_bytes());
     }
 
     pub fn on_image_paste(&mut self, data_uri: &str) {
-        let Some(pty) = &self.pty else {
-            return;
-        };
         // Send image data URI as text input
         let bracketed = format!("\x1b[200~{}\x1b[201~", data_uri);
-        let _ = pty.send_input(bracketed.as_bytes());
+        self.send_input(bracketed.as_bytes());
     }
 
     pub fn on_resize(&mut self, cols: u16, rows: u16) {
@@ -163,7 +167,11 @@ impl App {
     }
 
     pub fn attach_pty(&mut self, pty: PtyHandle) {
-        self.pty = Some(pty);
+        self.pty = Some(pty.clone());
+        // Flush buffered input to PTY
+        while let Some(bytes) = self.input_buffer.pop_front() {
+            let _ = pty.send_input(&bytes);
+        }
     }
 
     pub fn parser(&self) -> Option<Arc<Mutex<vt100::Parser>>> {
@@ -416,5 +424,31 @@ fn key_event_to_bytes(key: KeyEvent) -> Option<Vec<u8>> {
         KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
         KeyCode::Insert => Some(b"\x1b[2~".to_vec()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_input_buffering() {
+        let config = Config::default();
+        let config_store = ConfigStore::new(config, PathBuf::from("/test/config.toml"));
+        let mut app = App::new(Duration::from_millis(250), config_store);
+
+        // Initially buffer should be empty
+        assert!(app.input_buffer.is_empty());
+
+        // Simulate input before PTY attached
+        app.send_input(b"test1");
+        app.send_input(b"test2");
+
+        // Buffer should contain both inputs
+        assert_eq!(app.input_buffer.len(), 2);
+        assert_eq!(app.input_buffer[0], b"test1");
+        assert_eq!(app.input_buffer[1], b"test2");
     }
 }
