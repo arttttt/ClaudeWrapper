@@ -96,8 +96,8 @@ pub fn run() -> io::Result<()> {
     app.request_backends_refresh();
 
     let (command, args) = parse_command();
-    // Only set BASE_URL to redirect traffic through proxy
-    // Claude Code uses its own OAuth for Authorization header
+    // Set BASE_URL to redirect traffic through proxy
+    // Auth token is injected by proxy based on active backend (runtime)
     let env = vec![
         ("ANTHROPIC_BASE_URL".to_string(), proxy_base_url),
     ];

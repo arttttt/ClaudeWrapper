@@ -112,8 +112,6 @@ pub struct Backend {
     /// Direct API key for this backend.
     #[serde(default)]
     pub api_key: Option<String>,
-    /// List of supported models.
-    pub models: Vec<String>,
 }
 
 impl Default for Backend {
@@ -124,7 +122,6 @@ impl Default for Backend {
             base_url: "https://api.anthropic.com".to_string(),
             auth_type_str: "passthrough".to_string(),
             api_key: None,
-            models: vec!["claude-sonnet-4-20250514".to_string()],
         }
     }
 }

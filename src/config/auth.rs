@@ -42,7 +42,6 @@ mod tests {
             base_url: "https://example.com".to_string(),
             auth_type_str: auth_type.to_string(),
             api_key: api_key.map(|value| value.to_string()),
-            models: vec![],
         }
     }
 

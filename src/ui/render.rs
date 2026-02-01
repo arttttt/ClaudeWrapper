@@ -48,23 +48,13 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                 let mut lines = Vec::new();
 
                 // Find active backend info
-                let active_backend = app
-                    .backends()
-                    .iter()
-                    .find(|b| b.is_active);
+                let active_backend = app.backends().iter().find(|b| b.is_active);
 
                 if let Some(backend) = active_backend {
                     // Provider
                     lines.push(Line::from(vec![
                         Span::styled("  Provider:  ", Style::default().fg(HEADER_TEXT)),
                         Span::styled(&backend.display_name, Style::default().fg(HEADER_TEXT)),
-                    ]));
-
-                    // Model
-                    let model = backend.model_hint.as_deref().unwrap_or("unknown");
-                    lines.push(Line::from(vec![
-                        Span::styled("  Model:     ", Style::default().fg(HEADER_TEXT)),
-                        Span::styled(model, Style::default().fg(HEADER_TEXT)),
                     ]));
 
                     // URL (truncate if too long)
@@ -79,11 +69,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                     ]));
 
                     // Status
-                    let (status_text, status_color) = if app.proxy_status().is_some_and(|s| s.healthy) {
-                        ("Connected", STATUS_OK)
-                    } else {
-                        ("Error", STATUS_ERROR)
-                    };
+                    let (status_text, status_color) =
+                        if app.proxy_status().is_some_and(|s| s.healthy) {
+                            ("Connected", STATUS_OK)
+                        } else {
+                            ("Error", STATUS_ERROR)
+                        };
                     lines.push(Line::from(vec![
                         Span::styled("  Status:    ", Style::default().fg(HEADER_TEXT)),
                         Span::styled(status_text, Style::default().fg(status_color)),
@@ -154,9 +145,10 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
 
                 if !recent_errors.is_empty() {
                     lines.push(Line::from(""));
-                    lines.push(Line::from(vec![
-                        Span::styled("  Recent Issues:", Style::default().fg(STATUS_WARNING)),
-                    ]));
+                    lines.push(Line::from(vec![Span::styled(
+                        "  Recent Issues:",
+                        Style::default().fg(STATUS_WARNING),
+                    )]));
 
                     for error in recent_errors {
                         let time_ago = format_time_ago(error.timestamp);
@@ -166,7 +158,10 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                             ErrorSeverity::Info => STATUS_OK,
                         };
                         lines.push(Line::from(vec![
-                            Span::styled(format!("    [{time_ago}] "), Style::default().fg(HEADER_TEXT)),
+                            Span::styled(
+                                format!("    [{time_ago}] "),
+                                Style::default().fg(HEADER_TEXT),
+                            ),
                             Span::styled(error.message.clone(), Style::default().fg(color)),
                         ]));
 
@@ -178,9 +173,10 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                                 } else {
                                     first_line.to_string()
                                 };
-                                lines.push(Line::from(vec![
-                                    Span::styled(format!("      {truncated}"), Style::default().fg(HEADER_TEXT)),
-                                ]));
+                                lines.push(Line::from(vec![Span::styled(
+                                    format!("      {truncated}"),
+                                    Style::default().fg(HEADER_TEXT),
+                                )]));
                             }
                         }
                     }
@@ -190,33 +186,34 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                 let recoveries = app.error_registry().active_recoveries();
                 if !recoveries.is_empty() {
                     lines.push(Line::from(""));
-                    lines.push(Line::from(vec![
-                        Span::styled("  Recovery:", Style::default().fg(STATUS_WARNING)),
-                    ]));
+                    lines.push(Line::from(vec![Span::styled(
+                        "  Recovery:",
+                        Style::default().fg(STATUS_WARNING),
+                    )]));
 
                     for recovery in &recoveries {
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                format!(
-                                    "    {} (attempt {}/{})",
-                                    recovery.operation, recovery.attempt, recovery.max_attempts
-                                ),
-                                Style::default().fg(STATUS_WARNING),
+                        lines.push(Line::from(vec![Span::styled(
+                            format!(
+                                "    {} (attempt {}/{})",
+                                recovery.operation, recovery.attempt, recovery.max_attempts
                             ),
-                        ]));
+                            Style::default().fg(STATUS_WARNING),
+                        )]));
                     }
                 }
 
                 lines.push(Line::from(""));
-                lines.push(Line::from(vec![
-                    Span::styled("  Esc/Ctrl+S: Close", Style::default().fg(HEADER_TEXT)),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    "  Esc/Ctrl+S: Close",
+                    Style::default().fg(HEADER_TEXT),
+                )]));
 
                 if let Some(error) = app.last_ipc_error() {
                     lines.push(Line::from(""));
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("  IPC error: {error}"), Style::default().fg(STATUS_ERROR)),
-                    ]));
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("  IPC error: {error}"),
+                        Style::default().fg(STATUS_ERROR),
+                    )]));
                 }
 
                 ("Network Diagnostics", lines)
