@@ -67,18 +67,19 @@ pub struct ThinkingConfig {
 ///
 /// When switching backends, this mode summarizes the session history
 /// using an LLM call to an Anthropic-compatible API.
+/// All fields are required when using summarize mode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummarizeConfig {
     /// Base URL for the summarization API (Anthropic-compatible endpoint).
-    #[serde(default = "default_summarize_base_url")]
+    #[serde(default)]
     pub base_url: String,
 
-    /// API key for summarization. If not set, uses SUMMARIZER_API_KEY env var.
+    /// API key for summarization.
     #[serde(default)]
     pub api_key: Option<String>,
 
-    /// Model to use for summarization (e.g., "glm-4.7", "glm-4.5-flash").
-    #[serde(default = "default_summarize_model")]
+    /// Model to use for summarization.
+    #[serde(default)]
     pub model: String,
 
     /// Maximum tokens in the generated summary.
@@ -229,14 +230,6 @@ fn default_proxy_base_url() -> String {
     "http://127.0.0.1:8080".to_string()
 }
 
-fn default_summarize_base_url() -> String {
-    "https://api.z.ai/api/anthropic".to_string()
-}
-
-fn default_summarize_model() -> String {
-    "glm-4.7".to_string()
-}
-
 fn default_summarize_max_tokens() -> u32 {
     500
 }
@@ -329,9 +322,9 @@ impl Default for ThinkingConfig {
 impl Default for SummarizeConfig {
     fn default() -> Self {
         Self {
-            base_url: default_summarize_base_url(),
+            base_url: String::new(),
             api_key: None,
-            model: default_summarize_model(),
+            model: String::new(),
             max_tokens: default_summarize_max_tokens(),
         }
     }

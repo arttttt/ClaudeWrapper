@@ -1,6 +1,6 @@
 //! Summarizer client for calling LLM APIs to summarize session history.
 //!
-//! This client is designed for Anthropic-compatible APIs (like Z.ai).
+//! This client is designed for Anthropic-compatible APIs.
 //! It's isolated but structured for future unification with the main backend code.
 
 use reqwest::Client;
@@ -42,10 +42,7 @@ impl SummarizerClient {
     ///
     /// Returns `None` if no API key is available (neither in config nor env var).
     pub fn new(config: SummarizeConfig, debug_logger: Option<Arc<DebugLogger>>) -> Option<Self> {
-        let api_key = config
-            .api_key
-            .clone()
-            .or_else(|| std::env::var("SUMMARIZER_API_KEY").ok())?;
+        let api_key = config.api_key.clone()?;
 
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(60))
@@ -346,8 +343,7 @@ mod tests {
             api_key: None,
             ..make_test_config()
         };
-        // This will only succeed if SUMMARIZER_API_KEY is set in env
-        // For unit test, we can't guarantee the env var is unset
+        // This will return None since api_key is None
         // So we just verify the function doesn't panic
         let _ = SummarizerClient::new(config, None);
     }
@@ -444,18 +440,19 @@ mod tests {
     }
 
     /// Integration test with real API.
-    /// Run with: SUMMARIZER_API_KEY=your-key cargo test test_summarizer_real_api -- --ignored
+    /// Run with: cargo test test_summarizer_real_api -- --ignored
+    /// Requires api_key, base_url, and model to be set in the test config below.
     #[tokio::test]
-    #[ignore = "requires SUMMARIZER_API_KEY"]
+    #[ignore = "requires api_key to be configured"]
     async fn test_summarizer_real_api() {
         let config = SummarizeConfig {
-            base_url: "https://api.z.ai/api/anthropic".to_string(),
-            api_key: None, // Will use env var
-            model: "glm-4.7".to_string(),
+            base_url: "https://your-api-endpoint.com".to_string(),
+            api_key: Some("your-api-key-here".to_string()),
+            model: "your-model-name".to_string(),
             max_tokens: 200,
         };
 
-        let client = SummarizerClient::new(config, None).expect("SUMMARIZER_API_KEY must be set");
+        let client = SummarizerClient::new(config, None).expect("api_key must be set in test config");
 
         let messages = vec![
             json!({"role": "user", "content": "Help me write a function to calculate fibonacci numbers"}),

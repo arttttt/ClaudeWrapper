@@ -26,7 +26,7 @@ pub enum TransformError {
 #[derive(Debug, Error)]
 pub enum SummarizeError {
     /// API key not configured
-    #[error("API key not configured: set api_key in config or SUMMARIZER_API_KEY env var")]
+    #[error("API key not configured: set api_key in [thinking.summarize] section")]
     NotConfigured,
 
     /// Network error during API call

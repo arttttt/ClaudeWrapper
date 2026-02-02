@@ -2,11 +2,11 @@
 
 TUI wrapper for Claude Code with hot-swappable backend support and transparent API proxying.
 
-**Note:** Only Anthropic API-compatible backends are supported (Anthropic, GLM/Z.ai, and other providers that implement the Anthropic API format).
+**Note:** Only Anthropic API-compatible backends are supported.
 
 ## Features
 
-- **Hot-Swap Backends** — Switch between Anthropic, GLM, and other providers without restarting Claude
+- **Hot-Swap Backends** — Switch between providers without restarting Claude
 - **Session Context Preservation** — Summarize conversation on backend switch (summarize mode)
 - **Transparent Proxy** — Routes API requests through active backend
 - **Thinking Block Handling** — Strip or summarize thinking blocks for cross-provider compatibility
@@ -32,7 +32,7 @@ TUI wrapper for Claude Code with hot-swappable backend support and transparent A
                │
      ┌─────────┼─────────┐
      ▼         ▼         ▼
- Anthropic    GLM      Other
+ Backend1  Backend2   Backend3
 ```
 
 ## Building
@@ -80,11 +80,11 @@ base_url = "https://api.anthropic.com"
 auth_type = "passthrough"  # Forward Claude Code's auth headers
 
 [[backends]]
-name = "glm"
-display_name = "GLM (Z.ai)"
-base_url = "https://api.z.ai/api/anthropic"
+name = "alternative"
+display_name = "Alternative Provider"
+base_url = "https://your-provider.com/api"
 auth_type = "bearer"
-api_key = "your-glm-api-key"  # Or use passthrough if Claude Code handles auth
+api_key = "your-api-key"
 ```
 
 ### Full Example
@@ -111,9 +111,9 @@ scrollback_lines = 10000          # History buffer size
 mode = "summarize"                # "strip" or "summarize"
 
 [thinking.summarize]
-base_url = "https://api.z.ai/api/anthropic"  # Anthropic-compatible API
-api_key = "your-summarizer-api-key"          # API key for summarization
-model = "glm-4.7"                             # Model for summarization
+base_url = "https://your-summarizer-api.com"  # Anthropic-compatible API
+api_key = "your-summarizer-api-key"           # API key for summarization
+model = "your-model-name"                     # Model for summarization
 max_tokens = 500                              # Max tokens in summary
 
 [debug_logging]
@@ -128,11 +128,11 @@ base_url = "https://api.anthropic.com"
 auth_type = "passthrough"         # Forward Claude Code's auth headers
 
 [[backends]]
-name = "glm"
-display_name = "GLM (Z.ai)"
-base_url = "https://api.z.ai/api/anthropic"
+name = "alternative"
+display_name = "Alternative Provider"
+base_url = "https://your-provider.com/api"
 auth_type = "bearer"
-api_key = "your-glm-api-key"      # Direct API key
+api_key = "your-api-key"
 
 [[backends]]
 name = "custom"
@@ -146,10 +146,8 @@ auth_type = "passthrough"         # Forward original auth headers
 | Type | Header | Use Case |
 |------|--------|----------|
 | `api_key` | `x-api-key: <value>` | Anthropic API |
-| `bearer` | `Authorization: Bearer <value>` | Most providers (GLM, OpenAI-compatible) |
+| `bearer` | `Authorization: Bearer <value>` | Most providers |
 | `passthrough` | Forwards original headers | OAuth flows, custom auth |
-
-API keys can be specified directly (`api_key = "sk-..."`) or via environment variable (`api_key_env = "ENV_VAR_NAME"`).
 
 ### Thinking Block Modes
 
@@ -178,9 +176,9 @@ Completely removes thinking blocks from message history. Fast and stable, but lo
 mode = "summarize"
 
 [thinking.summarize]
-base_url = "https://api.z.ai/api/anthropic"  # Anthropic-compatible API
-api_key = "your-summarizer-api-key"          # API key for summarization
-model = "glm-4.7"                             # Model for summarization
+base_url = "https://your-summarizer-api.com"  # Anthropic-compatible API
+api_key = "your-summarizer-api-key"           # API key for summarization
+model = "your-model-name"                     # Model for summarization
 max_tokens = 500                              # Max tokens in summary
 ```
 

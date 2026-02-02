@@ -130,15 +130,27 @@ impl Config {
             }
         }
 
-        // Validate summarize mode has API key configured
+        // Validate summarize mode has all required fields configured
         if self.thinking.mode == ThinkingMode::Summarize {
-            let has_api_key = self.thinking.summarize.api_key.is_some()
-                || std::env::var("SUMMARIZER_API_KEY").is_ok();
+            let cfg = &self.thinking.summarize;
 
-            if !has_api_key {
+            if cfg.base_url.is_empty() {
                 return Err(ConfigError::ValidationError {
-                    message: "Summarize mode is enabled for backend switching, but no API key is configured. \
-                        Set 'api_key' in [thinking.summarize] section or SUMMARIZER_API_KEY environment variable."
+                    message: "Summarize mode requires 'base_url' in [thinking.summarize] section."
+                        .to_string(),
+                });
+            }
+
+            if cfg.api_key.is_none() {
+                return Err(ConfigError::ValidationError {
+                    message: "Summarize mode requires 'api_key' in [thinking.summarize] section."
+                        .to_string(),
+                });
+            }
+
+            if cfg.model.is_empty() {
+                return Err(ConfigError::ValidationError {
+                    message: "Summarize mode requires 'model' in [thinking.summarize] section."
                         .to_string(),
                 });
             }

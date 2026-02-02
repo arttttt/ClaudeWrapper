@@ -397,11 +397,11 @@ api_key = "test-key"
     let config: Config = toml::from_str(toml_content).expect("Should parse valid TOML");
 
     assert_eq!(config.thinking.mode, ThinkingMode::Summarize);
-    // Should use defaults
-    assert_eq!(config.thinking.summarize.base_url, "https://api.z.ai/api/anthropic");
+    // Fields are empty by default (no hardcoded values)
+    assert_eq!(config.thinking.summarize.base_url, "");
     assert_eq!(config.thinking.summarize.api_key, None);
-    assert_eq!(config.thinking.summarize.model, "glm-4.7");
-    assert_eq!(config.thinking.summarize.max_tokens, 500);
+    assert_eq!(config.thinking.summarize.model, "");
+    assert_eq!(config.thinking.summarize.max_tokens, 500); // Only max_tokens has default
 }
 
 /// Test SummarizeConfig default values.
@@ -409,18 +409,16 @@ api_key = "test-key"
 fn test_summarize_config_default() {
     let config = SummarizeConfig::default();
 
-    assert_eq!(config.base_url, "https://api.z.ai/api/anthropic");
+    // All fields empty by default except max_tokens
+    assert_eq!(config.base_url, "");
     assert_eq!(config.api_key, None);
-    assert_eq!(config.model, "glm-4.7");
+    assert_eq!(config.model, "");
     assert_eq!(config.max_tokens, 500);
 }
 
-/// Test that summarize mode without API key fails validation.
+/// Test that summarize mode without required fields fails validation.
 #[test]
-fn test_summarize_mode_requires_api_key() {
-    // Ensure env var is not set for this test
-    std::env::remove_var("SUMMARIZER_API_KEY");
-
+fn test_summarize_mode_requires_all_fields() {
     let toml_content = r#"
 [defaults]
 active = "claude"
@@ -429,7 +427,7 @@ timeout_seconds = 30
 [thinking]
 mode = "summarize"
 
-# Note: no api_key in [thinking.summarize]
+# Note: missing base_url, api_key, model in [thinking.summarize]
 
 [[backends]]
 name = "claude"
@@ -444,13 +442,12 @@ api_key = "test-key"
 
     assert!(result.is_err());
     let error = result.unwrap_err().to_string();
-    assert!(error.contains("Summarize mode"));
-    assert!(error.contains("API key"));
+    assert!(error.contains("Summarize mode requires"));
 }
 
-/// Test that summarize mode with API key in config passes validation.
+/// Test that summarize mode with all required fields passes validation.
 #[test]
-fn test_summarize_mode_with_config_api_key_passes() {
+fn test_summarize_mode_with_all_fields_passes() {
     let toml_content = r#"
 [defaults]
 active = "claude"
@@ -460,7 +457,9 @@ timeout_seconds = 30
 mode = "summarize"
 
 [thinking.summarize]
+base_url = "https://api.example.com"
 api_key = "test-summarizer-key"
+model = "test-model"
 
 [[backends]]
 name = "claude"
