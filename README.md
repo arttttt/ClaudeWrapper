@@ -2,7 +2,17 @@
 
 TUI wrapper for Claude Code with hot-swappable backend support and transparent API proxying.
 
+**Goal:** Make switching between API providers effortless. Configure all your backends once, then switch between them with a single hotkey — no config edits, no restarts, no interruptions.
+
 **Note:** Only Anthropic API-compatible backends are supported.
+
+## Why?
+
+Working with multiple LLM providers (Anthropic, OpenRouter, custom proxies) typically means editing config files or environment variables every time you want to switch. ClaudeWrapper eliminates this friction:
+
+- Define all your backends in one config file
+- Switch providers mid-session with `Ctrl+B`
+- Conversation context is preserved across switches (with summarize mode)
 
 ## Features
 
