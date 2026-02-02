@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::config::credentials::CredentialStatus;
-use crate::config::types::{Backend, Config};
+use crate::config::types::{Backend, Config, ThinkingMode};
 
 /// Errors that can occur when loading configuration.
 #[derive(Debug, Error)]
@@ -127,6 +127,20 @@ impl Config {
                         ),
                     });
                 }
+            }
+        }
+
+        // Validate summarize mode has API key configured
+        if self.thinking.mode == ThinkingMode::Summarize {
+            let has_api_key = self.thinking.summarize.api_key.is_some()
+                || std::env::var("SUMMARIZER_API_KEY").is_ok();
+
+            if !has_api_key {
+                return Err(ConfigError::ValidationError {
+                    message: "Summarize mode is enabled for backend switching, but no API key is configured. \
+                        Set 'api_key' in [thinking.summarize] section or SUMMARIZER_API_KEY environment variable."
+                        .to_string(),
+                });
             }
         }
 

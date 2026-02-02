@@ -414,3 +414,64 @@ fn test_summarize_config_default() {
     assert_eq!(config.model, "glm-4.7");
     assert_eq!(config.max_tokens, 500);
 }
+
+/// Test that summarize mode without API key fails validation.
+#[test]
+fn test_summarize_mode_requires_api_key() {
+    // Ensure env var is not set for this test
+    std::env::remove_var("SUMMARIZER_API_KEY");
+
+    let toml_content = r#"
+[defaults]
+active = "claude"
+timeout_seconds = 30
+
+[thinking]
+mode = "summarize"
+
+# Note: no api_key in [thinking.summarize]
+
+[[backends]]
+name = "claude"
+display_name = "Claude"
+base_url = "https://api.anthropic.com"
+auth_type = "api_key"
+api_key = "test-key"
+"#;
+
+    let config: Config = toml::from_str(toml_content).expect("Should parse valid TOML");
+    let result = config.validate();
+
+    assert!(result.is_err());
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("Summarize mode"));
+    assert!(error.contains("API key"));
+}
+
+/// Test that summarize mode with API key in config passes validation.
+#[test]
+fn test_summarize_mode_with_config_api_key_passes() {
+    let toml_content = r#"
+[defaults]
+active = "claude"
+timeout_seconds = 30
+
+[thinking]
+mode = "summarize"
+
+[thinking.summarize]
+api_key = "test-summarizer-key"
+
+[[backends]]
+name = "claude"
+display_name = "Claude"
+base_url = "https://api.anthropic.com"
+auth_type = "api_key"
+api_key = "test-key"
+"#;
+
+    let config: Config = toml::from_str(toml_content).expect("Should parse valid TOML");
+    let result = config.validate();
+
+    assert!(result.is_ok());
+}
