@@ -119,13 +119,43 @@ API keys can be specified directly (`api_key = "sk-..."`) or via environment var
 
 ### Thinking Block Modes
 
-When switching between providers, thinking blocks may need transformation:
+When switching between providers, thinking blocks need special handling due to signature validation:
 
-| Mode | Behavior |
-|------|----------|
-| `drop_signature` | Removes provider-specific signature, keeps thinking block structure |
-| `convert_to_text` | Converts thinking blocks to plain text content |
-| `convert_to_tags` | Wraps thinking content in `<think>...</think>` tags |
+| Mode | Behavior | Backend Switch |
+|------|----------|----------------|
+| `strip` | Removes all thinking blocks from requests | Instant, no context preserved |
+| `summarize` | Summarizes session via external LLM on backend switch | Context preserved as summary |
+
+**Recommended:** Use `summarize` mode for most cases — it preserves conversation context when switching backends.
+
+#### Strip Mode (Simple)
+
+```toml
+[thinking]
+mode = "strip"
+```
+
+Completely removes thinking blocks from message history. Fast and stable, but loses thinking context between turns.
+
+#### Summarize Mode (Recommended)
+
+```toml
+[thinking]
+mode = "summarize"
+
+[summarize]
+base_url = "https://api.z.ai/api/anthropic"  # Anthropic-compatible API
+model = "glm-4.7"                             # Model for summarization
+max_tokens = 500                              # Max tokens in summary
+# api_key = "your-key"                        # Or use SUMMARIZER_API_KEY env var
+```
+
+When you switch backends:
+1. Current session history is summarized via the configured LLM
+2. Summary is prepended to the first message on the new backend
+3. New backend receives context: `[CONTEXT FROM PREVIOUS SESSION]...[/CONTEXT FROM PREVIOUS SESSION]`
+
+This allows seamless backend switching while preserving conversation context.
 
 ## License
 

@@ -600,30 +600,25 @@ src/proxy/thinking/
 - [x] 2.5.6: Unit тесты + integration тест (requires SUMMARIZER_API_KEY)
 - [x] 2.5.7: Env var: `SUMMARIZER_API_KEY` (generic name, not vendor-specific)
 
-#### Phase 2.6: MVI architecture + Summarization UI 🔄 IN PROGRESS
-- [x] 2.6.1: MVI infrastructure в `src/ui/mvi/`:
-  - `state.rs` — trait UiState
-  - `intent.rs` — trait Intent
-  - `reducer.rs` — trait Reducer
-- [x] 2.6.2: Summarization feature в `src/ui/summarization/`:
-  - `state.rs` — SummarizeDialogState (Hidden, Summarizing, Retrying, Failed, Success)
-  - `intent.rs` — SummarizeIntent (Start, AnimationTick, Error, Success, Retry/Cancel)
-  - `reducer.rs` — SummarizeReducer (state machine with 3 auto-retries)
-  - `dialog.rs` — render_summarize_dialog (spinner animation, inline buttons)
-- [ ] 2.6.3: Валидация на старте: crash если mode=summarize и нет API key
-- [ ] 2.6.4: Интеграция `SummarizerClient` в `SummarizeTransformer`
-- [ ] 2.6.5: Реализация `on_backend_switch` с retry логикой
+#### Phase 2.6: Summarization Core ✅ DONE
+- [x] 2.6.1: `SummarizerClient` интегрирован в `SummarizeTransformer`
+- [x] 2.6.2: Реализация `on_backend_switch` — вызывает summarize API
+- [x] 2.6.3: Захват streaming response через `ObservedStream` callback
+- [x] 2.6.4: SSE парсер для извлечения текста из streaming ответов
+- [x] 2.6.5: Prepend summary к первому запросу на новом бэкенде
+- [x] 2.6.6: Фильтрация `<system-reminder>` тегов из суммаризации
+- [x] 2.6.7: Защита от перезаписи auxiliary запросами (count_tokens, title generation)
+- [x] 2.6.8: Форматирование сообщений с закрывающими тегами `[/USER]`, `[/ASSISTANT]`
 
-#### Phase 2.7: IPC + UI интеграция
-- [ ] 2.7.1: IPC события: SummarizationStarted, Progress, Error, Completed
-- [ ] 2.7.2: Интеграция диалога поверх BackendSwitch popup
-- [ ] 2.7.3: Input handling для Retry/Cancel кнопок
-- [ ] 2.7.4: Animation tick timer для спиннера
+#### Phase 2.7: UI интеграция ✅ DONE (via existing UI)
+- [x] 2.7.1: Суммаризация происходит при переключении бэкенда
+- [x] 2.7.2: UI показывает прогресс через существующий механизм
+- [x] 2.7.3: Логирование в debug.log для отладки
 
-#### Phase 2.8: Polish
-- [ ] 2.8.1: Error recovery flow (user choice after max retries)
-- [ ] 2.8.2: Cancel подтверждение
-- [ ] 2.8.3: Success auto-close с delay
+#### Phase 2.8: Polish 📋 OPTIONAL
+- [ ] 2.8.1: Fallback на strip при ошибках суммаризации
+- [ ] 2.8.2: Кэширование резюме (по хэшу содержимого)
+- [ ] 2.8.3: Валидация API key на старте
 
 ### Phase 3: Native Mode 📋 FUTURE
 
