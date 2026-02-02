@@ -142,14 +142,26 @@ impl ThinkingTransformer for SummarizeTransformer {
         // Only save for real chat completion requests (/v1/messages endpoint),
         // not for count_tokens or other auxiliary requests that could overwrite
         // the real conversation with minimal/test messages.
+        // Also, only save if the new message count is >= existing count to preserve
+        // maximum context (internal requests like title generation have fewer messages).
         if context.is_chat_completion() {
             if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
                 let mut last_messages = self.last_messages.write().await;
-                *last_messages = Some(messages.clone());
-                tracing::trace!(
-                    message_count = messages.len(),
-                    "Saved messages for potential summarization"
-                );
+                let current_count = last_messages.as_ref().map(|m| m.len()).unwrap_or(0);
+
+                if messages.len() >= current_count {
+                    *last_messages = Some(messages.clone());
+                    tracing::trace!(
+                        message_count = messages.len(),
+                        "Saved messages for potential summarization"
+                    );
+                } else {
+                    tracing::trace!(
+                        new_count = messages.len(),
+                        existing_count = current_count,
+                        "Skipped saving messages - fewer than existing"
+                    );
+                }
             }
         }
 

@@ -185,6 +185,17 @@ impl SummarizerClient {
     }
 
     /// Format conversation messages as text for the summarization prompt.
+    ///
+    /// Formats as chronological history with opening and closing tags:
+    /// ```text
+    /// [USER]
+    /// message content
+    /// [/USER]
+    ///
+    /// [ASSISTANT]
+    /// response content
+    /// [/ASSISTANT]
+    /// ```
     fn format_messages_for_summary(&self, messages: &[Value]) -> String {
         let mut result = String::new();
 
@@ -197,7 +208,8 @@ impl SummarizerClient {
             let content = self.extract_message_content(msg);
 
             if !content.is_empty() {
-                result.push_str(&format!("[{}]\n{}\n\n", role.to_uppercase(), content));
+                let tag = role.to_uppercase();
+                result.push_str(&format!("[{}]\n{}\n[/{}]\n\n", tag, content, tag));
             }
         }
 
@@ -348,14 +360,26 @@ mod tests {
         let messages = vec![
             json!({"role": "user", "content": "Hello"}),
             json!({"role": "assistant", "content": "Hi there!"}),
+            json!({"role": "user", "content": "How are you?"}),
+            json!({"role": "assistant", "content": "I'm doing well!"}),
         ];
 
         let formatted = client.format_messages_for_summary(&messages);
 
-        assert!(formatted.contains("[USER]"));
-        assert!(formatted.contains("Hello"));
-        assert!(formatted.contains("[ASSISTANT]"));
-        assert!(formatted.contains("Hi there!"));
+        // Should have proper opening and closing tags
+        assert!(formatted.contains("[USER]\nHello\n[/USER]"));
+        assert!(formatted.contains("[ASSISTANT]\nHi there!\n[/ASSISTANT]"));
+        assert!(formatted.contains("[USER]\nHow are you?\n[/USER]"));
+        assert!(formatted.contains("[ASSISTANT]\nI'm doing well!\n[/ASSISTANT]"));
+
+        // Verify chronological order: first USER, then ASSISTANT, etc.
+        let user1_pos = formatted.find("[USER]\nHello").unwrap();
+        let asst1_pos = formatted.find("[ASSISTANT]\nHi there!").unwrap();
+        let user2_pos = formatted.find("[USER]\nHow are you?").unwrap();
+        let asst2_pos = formatted.find("[ASSISTANT]\nI'm doing well!").unwrap();
+        assert!(user1_pos < asst1_pos);
+        assert!(asst1_pos < user2_pos);
+        assert!(user2_pos < asst2_pos);
     }
 
     #[test]
