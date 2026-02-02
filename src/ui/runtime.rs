@@ -185,6 +185,12 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 if app.should_animate(ANIMATION_TICK_INTERVAL) {
                     app.dispatch_summarize(SummarizeIntent::AnimationTick);
                 }
+                // Check for scheduled auto-retry
+                if app.is_retry_due() {
+                    if let Some(backend_id) = app.pending_backend_switch().map(String::from) {
+                        app.request_summarize_and_switch(backend_id);
+                    }
+                }
                 if app.should_refresh_status(STATUS_REFRESH_INTERVAL) {
                     app.request_status_refresh();
                 }
@@ -251,6 +257,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 app.request_quit();
             }
             Ok(AppEvent::SummarizeSuccess { summary_preview }) => {
+                app.clear_scheduled_retry();
                 app.dispatch_summarize(SummarizeIntent::Success { summary_preview });
                 // Complete the switch - dialog will auto-close
                 if let Some(_backend_id) = app.complete_summarization() {
@@ -262,12 +269,9 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
             }
             Ok(AppEvent::SummarizeError { message }) => {
                 app.dispatch_summarize(SummarizeIntent::Error { message: message.clone() });
-                // Check if auto-retry should be triggered
-                if app.summarize_dialog().should_auto_retry() {
-                    if let Some(backend_id) = app.pending_backend_switch().map(String::from) {
-                        // Trigger retry after a brief pause (next tick will show updated UI)
-                        app.request_summarize_and_switch(backend_id);
-                    }
+                // Schedule auto-retry with exponential backoff if in Retrying state
+                if let Some(attempt) = app.summarize_dialog().retry_attempt() {
+                    app.schedule_retry(attempt);
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}

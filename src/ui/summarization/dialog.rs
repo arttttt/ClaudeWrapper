@@ -32,7 +32,13 @@ fn dialog_height(state: &SummarizeDialogState) -> u16 {
 /// Render the summarization dialog overlay.
 ///
 /// This should be rendered on top of the backend selection popup.
-pub fn render_summarize_dialog(frame: &mut Frame, state: &SummarizeDialogState, selected_button: u8) {
+/// `countdown_secs` is the time remaining until next auto-retry (for display).
+pub fn render_summarize_dialog(
+    frame: &mut Frame,
+    state: &SummarizeDialogState,
+    selected_button: u8,
+    countdown_secs: Option<u64>,
+) {
     if !state.is_visible() {
         return;
     }
@@ -64,7 +70,7 @@ pub fn render_summarize_dialog(frame: &mut Frame, state: &SummarizeDialogState, 
             error,
             animation_tick,
         } => {
-            render_retrying(frame, inner, error, *attempt, *animation_tick);
+            render_retrying(frame, inner, error, *attempt, *animation_tick, countdown_secs);
         }
 
         SummarizeDialogState::Failed { error } => {
@@ -94,8 +100,20 @@ fn render_progress(frame: &mut Frame, area: Rect, message: &str, animation_tick:
 }
 
 /// Render the retrying state.
-fn render_retrying(frame: &mut Frame, area: Rect, error: &str, attempt: u8, animation_tick: u8) {
+fn render_retrying(
+    frame: &mut Frame,
+    area: Rect,
+    error: &str,
+    attempt: u8,
+    animation_tick: u8,
+    countdown_secs: Option<u64>,
+) {
     let spinner = SPINNER_FRAMES[(animation_tick as usize) % SPINNER_FRAMES.len()];
+
+    let countdown_text = match countdown_secs {
+        Some(0) | None => "now".to_string(),
+        Some(secs) => format!("in {}s", secs),
+    };
 
     let lines = vec![
         Line::from(""),
@@ -106,7 +124,7 @@ fn render_retrying(frame: &mut Frame, area: Rect, error: &str, attempt: u8, anim
         Line::from(vec![
             Span::styled(format!("  {} ", spinner), Style::default().fg(STATUS_OK)),
             Span::styled(
-                format!("Retrying ({}/{})...", attempt, MAX_AUTO_RETRIES),
+                format!("Retrying ({}/{}) {}...", attempt, MAX_AUTO_RETRIES, countdown_text),
                 Style::default().fg(HEADER_TEXT),
             ),
         ]),

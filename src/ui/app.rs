@@ -67,6 +67,8 @@ pub struct App {
     summarize_button_selection: u8,
     /// Last animation tick for spinner.
     last_animation_tick: Instant,
+    /// Scheduled time for next auto-retry (exponential backoff).
+    scheduled_retry_at: Option<Instant>,
 }
 
 impl App {
@@ -95,6 +97,7 @@ impl App {
             pending_backend_switch: None,
             summarize_button_selection: 0,
             last_animation_tick: now,
+            scheduled_retry_at: None,
         }
     }
 
@@ -434,6 +437,7 @@ impl App {
     pub fn cancel_summarization(&mut self) {
         self.dispatch_summarize(SummarizeIntent::Hide);
         self.pending_backend_switch = None;
+        self.scheduled_retry_at = None;
     }
 
     /// Get the currently selected button (0 = Retry, 1 = Cancel).
@@ -458,6 +462,36 @@ impl App {
             return true;
         }
         false
+    }
+
+    /// Schedule a retry with exponential backoff.
+    /// Delay: 1s for attempt 1, 2s for attempt 2, 4s for attempt 3.
+    pub fn schedule_retry(&mut self, attempt: u8) {
+        let delay_secs = 1u64 << (attempt.saturating_sub(1).min(4)); // 1, 2, 4, 8, 16 max
+        self.scheduled_retry_at = Some(Instant::now() + Duration::from_secs(delay_secs));
+    }
+
+    /// Clear any scheduled retry.
+    pub fn clear_scheduled_retry(&mut self) {
+        self.scheduled_retry_at = None;
+    }
+
+    /// Check if a scheduled retry is due. Returns true and clears if due.
+    pub fn is_retry_due(&mut self) -> bool {
+        if let Some(scheduled) = self.scheduled_retry_at {
+            if Instant::now() >= scheduled {
+                self.scheduled_retry_at = None;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get seconds remaining until scheduled retry (for UI display).
+    pub fn retry_countdown_secs(&self) -> Option<u64> {
+        self.scheduled_retry_at.map(|scheduled| {
+            scheduled.saturating_duration_since(Instant::now()).as_secs()
+        })
     }
 
     fn send_command(&mut self, command: UiCommand) -> bool {

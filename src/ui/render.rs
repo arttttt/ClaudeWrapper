@@ -306,6 +306,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                 frame,
                 app.summarize_dialog(),
                 app.summarize_button_selection(),
+                app.retry_countdown_secs(),
             );
         }
     }
