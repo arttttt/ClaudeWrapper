@@ -353,10 +353,10 @@ timeout_seconds = 30
 mode = "summarize"
 
 [thinking.summarize]
-model = "claude-3-haiku-20240307"
-backend = "claude"
+base_url = "https://api.example.com/v1/messages"
+api_key = "test-summarizer-key"
+model = "test-model"
 max_tokens = 300
-prompt = "Custom summarization prompt"
 
 [[backends]]
 name = "claude"
@@ -369,10 +369,10 @@ api_key = "test-key"
     let config: Config = toml::from_str(toml_content).expect("Should parse valid TOML");
 
     assert_eq!(config.thinking.mode, ThinkingMode::Summarize);
-    assert_eq!(config.thinking.summarize.model, "claude-3-haiku-20240307");
-    assert_eq!(config.thinking.summarize.backend, Some("claude".to_string()));
+    assert_eq!(config.thinking.summarize.base_url, "https://api.example.com/v1/messages");
+    assert_eq!(config.thinking.summarize.api_key, Some("test-summarizer-key".to_string()));
+    assert_eq!(config.thinking.summarize.model, "test-model");
     assert_eq!(config.thinking.summarize.max_tokens, 300);
-    assert_eq!(config.thinking.summarize.prompt, "Custom summarization prompt");
 }
 
 /// Test that [thinking.summarize] uses defaults when not specified.
@@ -398,10 +398,10 @@ api_key = "test-key"
 
     assert_eq!(config.thinking.mode, ThinkingMode::Summarize);
     // Should use defaults
-    assert_eq!(config.thinking.summarize.model, "claude-3-haiku-20240307");
-    assert_eq!(config.thinking.summarize.backend, None);
+    assert_eq!(config.thinking.summarize.base_url, "https://api.z.ai/api/anthropic");
+    assert_eq!(config.thinking.summarize.api_key, None);
+    assert_eq!(config.thinking.summarize.model, "glm-4.7");
     assert_eq!(config.thinking.summarize.max_tokens, 500);
-    assert!(config.thinking.summarize.prompt.contains("Summarize"));
 }
 
 /// Test SummarizeConfig default values.
@@ -409,8 +409,8 @@ api_key = "test-key"
 fn test_summarize_config_default() {
     let config = SummarizeConfig::default();
 
-    assert_eq!(config.model, "claude-3-haiku-20240307");
-    assert_eq!(config.backend, None);
+    assert_eq!(config.base_url, "https://api.z.ai/api/anthropic");
+    assert_eq!(config.api_key, None);
+    assert_eq!(config.model, "glm-4.7");
     assert_eq!(config.max_tokens, 500);
-    assert!(config.prompt.contains("handoff"));
 }

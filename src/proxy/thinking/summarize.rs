@@ -230,15 +230,16 @@ mod tests {
     #[tokio::test]
     async fn config_accessible() {
         let config = SummarizeConfig {
+            base_url: "https://api.example.com".to_string(),
+            api_key: Some("test-key".to_string()),
             model: "test-model".to_string(),
-            backend: Some("test-backend".to_string()),
             max_tokens: 100,
-            prompt: "Test prompt".to_string(),
         };
         let transformer = SummarizeTransformer::new(config);
 
         assert_eq!(transformer.config().model, "test-model");
         assert_eq!(transformer.config().max_tokens, 100);
+        assert_eq!(transformer.config().base_url, "https://api.example.com");
     }
 
     // ========================================================================

@@ -29,12 +29,14 @@ mod context;
 mod error;
 mod strip;
 mod summarize;
+mod summarizer;
 mod traits;
 
 pub use context::{TransformContext, TransformResult, TransformStats};
-pub use error::TransformError;
+pub use error::{SummarizeError, TransformError};
 pub use strip::StripTransformer;
 pub use summarize::SummarizeTransformer;
+pub use summarizer::SummarizerClient;
 pub use traits::ThinkingTransformer;
 
 use crate::config::{ThinkingConfig, ThinkingMode};
@@ -175,10 +177,10 @@ mod tests {
         let config = ThinkingConfig {
             mode: ThinkingMode::Summarize,
             summarize: SummarizeConfig {
+                base_url: "https://api.example.com".to_string(),
+                api_key: Some("test-key".to_string()),
                 model: "test-model".to_string(),
-                backend: Some("test-backend".to_string()),
                 max_tokens: 100,
-                prompt: "Test prompt".to_string(),
             },
         };
         let registry = TransformerRegistry::new(config);
