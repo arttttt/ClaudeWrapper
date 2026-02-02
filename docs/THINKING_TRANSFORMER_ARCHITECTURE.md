@@ -586,10 +586,10 @@ src/proxy/thinking/
 - [x] 2.3.3: `SummarizeTransformer` импортирует и использует функции из `strip.rs`
 - [x] 2.3.4: Существующие тесты покрывают strip в контексте Summarize
 
-#### Phase 2.4: Prepend логика
-- [ ] 2.4.1: Метод `prepend_summary_to_user_message(body, summary)`
-- [ ] 2.4.2: Интеграция в `transform_request` — проверка и использование `pending_summary`
-- [ ] 2.4.3: Тесты prepend к разным форматам сообщений
+#### Phase 2.4: Prepend логика ✅ DONE
+- [x] 2.4.1: Функция `prepend_summary_to_user_message(body, summary)` — обрабатывает string и array content
+- [x] 2.4.2: Интеграция в `transform_request` — берёт `pending_summary`, prepend, очищает
+- [x] 2.4.3: Тесты: string content, array с text, array без text, no user message, integration
 
 #### Phase 2.5: LLM клиент
 - [ ] 2.5.1: Добавить `reqwest::Client` в структуру `SummarizeTransformer`
