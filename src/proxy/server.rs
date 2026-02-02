@@ -12,6 +12,7 @@ use crate::proxy::connection::ConnectionCounter;
 use crate::proxy::pool::PoolConfig;
 use crate::proxy::router::{build_router, RouterEngine};
 use crate::proxy::shutdown::ShutdownManager;
+use crate::proxy::thinking::TransformerRegistry;
 use crate::proxy::timeout::TimeoutConfig;
 
 pub struct ProxyServer {
@@ -24,6 +25,7 @@ pub struct ProxyServer {
     backend_state: BackendState,
     observability: ObservabilityHub,
     debug_logger: Arc<DebugLogger>,
+    transformer_registry: Arc<TransformerRegistry>,
 }
 
 impl ProxyServer {
@@ -36,6 +38,9 @@ impl ProxyServer {
         let debug_logger = Arc::new(DebugLogger::new(config.get().debug_logging.clone()));
         let observability = ObservabilityHub::new(1000)
             .with_plugins(vec![debug_logger.clone()]);
+        let transformer_registry = Arc::new(TransformerRegistry::new(
+            config.get().thinking.clone(),
+        ));
         let router = RouterEngine::new(
             config,
             timeout_config,
@@ -43,6 +48,7 @@ impl ProxyServer {
             backend_state.clone(),
             observability.clone(),
             debug_logger.clone(),
+            transformer_registry.clone(),
         );
         Ok(Self {
             addr: SocketAddr::from(([127, 0, 0, 1], 0)), // Will be determined at bind time
@@ -52,6 +58,7 @@ impl ProxyServer {
             backend_state,
             observability,
             debug_logger,
+            transformer_registry,
         })
     }
 
@@ -116,6 +123,10 @@ impl ProxyServer {
 
     pub fn shutdown_handle(&self) -> Arc<ShutdownManager> {
         self.shutdown.clone()
+    }
+
+    pub fn transformer_registry(&self) -> Arc<TransformerRegistry> {
+        self.transformer_registry.clone()
     }
 
     pub fn handle(&self) -> ProxyHandle {

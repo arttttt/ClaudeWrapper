@@ -10,6 +10,7 @@ use crate::ui::events::{mouse_scroll_direction, AppEvent, EventHandler};
 use crate::ui::input::{handle_key, InputAction};
 use crate::ui::layout::body_rect;
 use crate::ui::render::draw;
+use crate::ui::summarization::SummarizeIntent;
 use crate::ui::terminal_guard::setup_terminal;
 use ratatui::layout::Rect;
 use std::io;
@@ -21,6 +22,7 @@ const UI_COMMAND_BUFFER: usize = 32;
 const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const METRICS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const BACKENDS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const ANIMATION_TICK_INTERVAL: Duration = Duration::from_millis(100);
 
 pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Result<()> {
     // Initialize tracing (file logging if CLAUDE_WRAPPER_LOG is set)
@@ -66,6 +68,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     let observability = proxy_server.observability();
     let debug_logger = proxy_server.debug_logger();
     let shutdown = proxy_server.shutdown_handle();
+    let transformer_registry = proxy_server.transformer_registry();
     let started_at = std::time::Instant::now();
 
     let (ipc_client, ipc_server) = IpcLayer::new();
@@ -80,6 +83,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
         debug_logger,
         shutdown,
         started_at,
+        transformer_registry,
     ));
 
     let bridge_config = config_store.clone();
@@ -140,8 +144,21 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 // Reset scrollback to live view on any key input
                 app.reset_scrollback();
                 let action = handle_key(&mut app, key);
-                if action == InputAction::ImagePaste {
-                    handle_image_paste(&mut app, &mut clipboard);
+                match action {
+                    InputAction::None => {}
+                    InputAction::ImagePaste => {
+                        handle_image_paste(&mut app, &mut clipboard);
+                    }
+                    InputAction::RetrySummarization => {
+                        // Re-trigger the summarization
+                        if let Some(backend_id) = app.pending_backend_switch().map(String::from) {
+                            app.dispatch_summarize(SummarizeIntent::Start);
+                            app.request_summarize_and_switch(backend_id);
+                        }
+                    }
+                    InputAction::CancelSummarization => {
+                        // Already handled in input handler
+                    }
                 }
             }
             Ok(AppEvent::Mouse(mouse)) => {
@@ -164,6 +181,10 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
             Ok(AppEvent::ImagePaste(data_uri)) => app.on_image_paste(&data_uri),
             Ok(AppEvent::Tick) => {
                 app.on_tick();
+                // Animation tick for summarization spinner
+                if app.should_animate(ANIMATION_TICK_INTERVAL) {
+                    app.dispatch_summarize(SummarizeIntent::AnimationTick);
+                }
                 if app.should_refresh_status(STATUS_REFRESH_INTERVAL) {
                     app.request_status_refresh();
                 }
@@ -229,6 +250,20 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 );
                 app.request_quit();
             }
+            Ok(AppEvent::SummarizeSuccess { summary_preview }) => {
+                app.dispatch_summarize(SummarizeIntent::Success { summary_preview });
+                // Complete the switch - dialog will auto-close
+                if let Some(_backend_id) = app.complete_summarization() {
+                    app.close_popup();
+                    // Backend was already switched by IPC handler
+                    app.request_backends_refresh();
+                    app.request_status_refresh();
+                }
+            }
+            Ok(AppEvent::SummarizeError { message }) => {
+                app.dispatch_summarize(SummarizeIntent::Error { message });
+                // MVI reducer handles auto-retry logic
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -280,6 +315,23 @@ async fn run_ui_bridge(
                     }
                     Err(err) => {
                         let _ = event_tx.send(AppEvent::IpcError(err.to_string()));
+                    }
+                }
+            }
+            UiCommand::SummarizeAndSwitchBackend { from_backend, to_backend } => {
+                match ipc_client.summarize_and_switch_backend(from_backend, to_backend).await {
+                    Ok(Ok(summary_preview)) => {
+                        let _ = event_tx.send(AppEvent::SummarizeSuccess { summary_preview });
+                    }
+                    Ok(Err(err)) => {
+                        let _ = event_tx.send(AppEvent::SummarizeError {
+                            message: err.to_string(),
+                        });
+                    }
+                    Err(err) => {
+                        let _ = event_tx.send(AppEvent::SummarizeError {
+                            message: err.to_string(),
+                        });
                     }
                 }
             }

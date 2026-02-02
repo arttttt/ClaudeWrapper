@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use crate::backend::BackendState;
 use crate::metrics::{DebugLogger, MetricsSnapshot, ObservabilityHub};
 use crate::proxy::shutdown::ShutdownManager;
+use crate::proxy::thinking::TransformerRegistry;
 
 use super::types::{BackendInfo, IpcCommand, ProxyStatus};
 
@@ -26,6 +27,7 @@ impl IpcServer {
         debug_logger: Arc<DebugLogger>,
         shutdown: Arc<ShutdownManager>,
         started_at: Instant,
+        transformer_registry: Arc<TransformerRegistry>,
     ) {
         while let Some(command) = self.receiver.recv().await {
             match command {
@@ -38,6 +40,37 @@ impl IpcServer {
                         .map(|_| backend_state.get_active_backend());
                     if respond_to.send(result).is_err() {
                         tracing::trace!("IPC: SwitchBackend response dropped (receiver gone)");
+                    }
+                }
+                IpcCommand::SummarizeAndSwitchBackend {
+                    from_backend,
+                    to_backend,
+                    respond_to,
+                } => {
+                    // 1. Call transformer to summarize
+                    let summarize_result = transformer_registry
+                        .on_backend_switch(&from_backend, &to_backend)
+                        .await;
+
+                    let result = match summarize_result {
+                        Ok(()) => {
+                            // 2. Switch backend
+                            if let Err(e) = backend_state.switch_backend(&to_backend) {
+                                Err(crate::proxy::thinking::TransformError::Config(
+                                    e.to_string(),
+                                ))
+                            } else {
+                                // Return a preview of success
+                                Ok("Session summarized".to_string())
+                            }
+                        }
+                        Err(e) => Err(e),
+                    };
+
+                    if respond_to.send(result).is_err() {
+                        tracing::trace!(
+                            "IPC: SummarizeAndSwitchBackend response dropped (receiver gone)"
+                        );
                     }
                 }
                 IpcCommand::GetStatus { respond_to } => {

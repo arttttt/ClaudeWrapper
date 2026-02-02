@@ -130,6 +130,22 @@ impl TransformerRegistry {
     pub fn current_config(&self) -> ThinkingConfig {
         self.config.read().expect("config lock poisoned").clone()
     }
+
+    /// Trigger backend switch on the current transformer.
+    ///
+    /// This calls `on_backend_switch` on the underlying transformer,
+    /// which for SummarizeTransformer will summarize the session.
+    pub async fn on_backend_switch(
+        &self,
+        from_backend: &str,
+        to_backend: &str,
+    ) -> Result<(), super::thinking::TransformError> {
+        let transformer = self.get().await;
+        let mut body = serde_json::json!({});
+        transformer
+            .on_backend_switch(from_backend, to_backend, &mut body)
+            .await
+    }
 }
 
 impl std::fmt::Debug for TransformerRegistry {

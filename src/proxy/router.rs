@@ -37,10 +37,8 @@ impl RouterEngine {
         backend_state: BackendState,
         observability: ObservabilityHub,
         debug_logger: Arc<DebugLogger>,
+        transformer_registry: Arc<TransformerRegistry>,
     ) -> Self {
-        let transformer_registry = Arc::new(TransformerRegistry::new(
-            config.get().thinking.clone(),
-        ));
         Self {
             health: Arc::new(HealthHandler::new()),
             upstream: Arc::new(UpstreamClient::new(

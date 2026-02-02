@@ -1,13 +1,19 @@
+use crate::config::ThinkingMode;
 use crate::ui::app::{App, PopupKind};
+use crate::ui::summarization::SummarizeDialogState;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// Action to take after processing a key event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputAction {
     /// No further action needed (handled internally).
     None,
     /// Request image paste from clipboard.
     ImagePaste,
+    /// Retry summarization (used when in Failed state).
+    RetrySummarization,
+    /// Cancel summarization.
+    CancelSummarization,
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
@@ -28,6 +34,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
     }
 
     if app.show_popup() {
+        // Handle summarization dialog when visible (has priority)
+        if app.is_summarize_dialog_visible() {
+            return handle_summarize_dialog_key(app, key);
+        }
+
         if matches!(key.code, KeyCode::Esc) {
             app.close_popup();
             return InputAction::None;
@@ -58,19 +69,15 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                     return InputAction::None;
                 }
                 KeyCode::Enter => {
-                    let index = app.backend_selection();
-                    if app.request_switch_backend_by_index(index + 1) {
-                        app.close_popup();
-                    }
-                    return InputAction::None;
+                    return handle_backend_switch_enter(app);
                 }
                 _ => {}
             }
             if let KeyCode::Char(ch) = key.code {
                 if ch.is_ascii_digit() {
                     let index = ch.to_digit(10).unwrap_or(0) as usize;
-                    if index > 0 && app.request_switch_backend_by_index(index) {
-                        app.close_popup();
+                    if index > 0 {
+                        return handle_backend_switch_by_number(app, index);
                     }
                     return InputAction::None;
                 }
@@ -114,4 +121,113 @@ fn is_ctrl_shift_char(key: KeyEvent, needle: char) -> bool {
 fn is_super_char(key: KeyEvent, needle: char) -> bool {
     matches!(key.code, KeyCode::Char(ch) if ch.eq_ignore_ascii_case(&needle))
         && key.modifiers.contains(KeyModifiers::SUPER)
+}
+
+/// Handle Enter key in backend switch popup.
+fn handle_backend_switch_enter(app: &mut App) -> InputAction {
+    let index = app.backend_selection();
+    let backends = app.backends();
+
+    let Some(backend) = backends.get(index) else {
+        return InputAction::None;
+    };
+
+    // If already active, just close
+    if backend.is_active {
+        app.close_popup();
+        return InputAction::None;
+    }
+
+    // Check if summarize mode is enabled
+    let config = app.config().get();
+    if config.thinking.mode == ThinkingMode::Summarize {
+        let backend_id = backend.id.clone();
+        // Start summarization flow
+        if let Some(id) = app.request_summarize_and_switch(backend_id.clone()) {
+            app.start_summarization_for_switch(id);
+        }
+        return InputAction::None;
+    }
+
+    // Normal mode: switch immediately
+    if app.request_switch_backend_by_index(index + 1) {
+        app.close_popup();
+    }
+    InputAction::None
+}
+
+/// Handle number key in backend switch popup.
+fn handle_backend_switch_by_number(app: &mut App, index: usize) -> InputAction {
+    let backends = app.backends();
+
+    let Some(backend) = backends.get(index.saturating_sub(1)) else {
+        return InputAction::None;
+    };
+
+    if backend.is_active {
+        app.close_popup();
+        return InputAction::None;
+    }
+
+    let config = app.config().get();
+    if config.thinking.mode == ThinkingMode::Summarize {
+        let backend_id = backend.id.clone();
+        if let Some(id) = app.request_summarize_and_switch(backend_id.clone()) {
+            app.start_summarization_for_switch(id);
+        }
+        return InputAction::None;
+    }
+
+    if app.request_switch_backend_by_index(index) {
+        app.close_popup();
+    }
+    InputAction::None
+}
+
+/// Handle key events when summarization dialog is visible.
+fn handle_summarize_dialog_key(app: &mut App, key: KeyEvent) -> InputAction {
+    match app.summarize_dialog() {
+        // In progress: only Esc cancels
+        SummarizeDialogState::Summarizing { .. } | SummarizeDialogState::Retrying { .. } => {
+            if matches!(key.code, KeyCode::Esc) {
+                app.cancel_summarization();
+                return InputAction::CancelSummarization;
+            }
+        }
+
+        // Failed: Tab toggles buttons, Enter selects, Esc/R/C shortcuts
+        SummarizeDialogState::Failed { .. } => {
+            match key.code {
+                KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
+                    app.toggle_summarize_button();
+                }
+                KeyCode::Enter => {
+                    if app.summarize_button_selection() == 0 {
+                        app.reset_summarize_button();
+                        return InputAction::RetrySummarization;
+                    } else {
+                        app.cancel_summarization();
+                        return InputAction::CancelSummarization;
+                    }
+                }
+                KeyCode::Esc => {
+                    app.cancel_summarization();
+                    return InputAction::CancelSummarization;
+                }
+                KeyCode::Char('r') | KeyCode::Char('R') => {
+                    app.reset_summarize_button();
+                    return InputAction::RetrySummarization;
+                }
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    app.cancel_summarization();
+                    return InputAction::CancelSummarization;
+                }
+                _ => {}
+            }
+        }
+
+        SummarizeDialogState::Success { .. } | SummarizeDialogState::Hidden => {}
+    }
+
+    InputAction::None
 }
