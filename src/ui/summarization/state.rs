@@ -77,6 +77,11 @@ impl SummarizeDialogState {
             _ => None,
         }
     }
+
+    /// Check if auto-retry should be triggered.
+    pub fn should_auto_retry(&self) -> bool {
+        matches!(self, Self::Retrying { .. })
+    }
 }
 
 #[cfg(test)]

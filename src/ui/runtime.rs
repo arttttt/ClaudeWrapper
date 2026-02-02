@@ -261,8 +261,14 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 }
             }
             Ok(AppEvent::SummarizeError { message }) => {
-                app.dispatch_summarize(SummarizeIntent::Error { message });
-                // MVI reducer handles auto-retry logic
+                app.dispatch_summarize(SummarizeIntent::Error { message: message.clone() });
+                // Check if auto-retry should be triggered
+                if app.summarize_dialog().should_auto_retry() {
+                    if let Some(backend_id) = app.pending_backend_switch().map(String::from) {
+                        // Trigger retry after a brief pause (next tick will show updated UI)
+                        app.request_summarize_and_switch(backend_id);
+                    }
+                }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
