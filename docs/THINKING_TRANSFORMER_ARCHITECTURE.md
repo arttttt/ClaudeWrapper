@@ -594,11 +594,11 @@ src/proxy/thinking/
 #### Phase 2.5: LLM клиент ✅ DONE
 - [x] 2.5.1: Создать `SummarizerClient` в `src/proxy/thinking/summarizer.rs`
 - [x] 2.5.2: Обновить `SummarizeConfig`: убрать `prompt`/`backend`, добавить `base_url`/`api_key`
-- [x] 2.5.3: Default endpoint: `https://api.z.ai/api/anthropic` (Anthropic-compatible)
+- [x] 2.5.3: Configurable endpoint (Anthropic-compatible API)
 - [x] 2.5.4: Hardcoded промпт в коде (MVP approach)
 - [x] 2.5.5: `SummarizeError` enum: NotConfigured, Network, ApiError, ParseError, EmptyResponse
-- [x] 2.5.6: Unit тесты + integration тест (requires SUMMARIZER_API_KEY)
-- [x] 2.5.7: Env var: `SUMMARIZER_API_KEY` (generic name, not vendor-specific)
+- [x] 2.5.6: Unit тесты + integration тест (requires TEST_PROVIDER_* env vars)
+- [x] 2.5.7: All config via explicit TOML fields (no env var fallbacks)
 
 #### Phase 2.6: Summarization Core ✅ DONE
 - [x] 2.6.1: `SummarizerClient` интегрирован в `SummarizeTransformer`
@@ -635,13 +635,13 @@ mode = "strip"  # "strip" | "summarize" | "native"
 # Настройки для summarize режима
 [thinking.summarize]
 # Base URL для Anthropic-compatible API
-base_url = "https://api.z.ai/api/anthropic"
+base_url = "https://your-api-endpoint.com"
 
-# API ключ (опционально, можно через env var SUMMARIZER_API_KEY)
+# API ключ
 api_key = "your-api-key"
 
 # Модель для суммаризации
-model = "glm-4.7"
+model = "your-model-name"
 
 # Максимальное количество токенов в саммари
 max_tokens = 500
@@ -651,14 +651,14 @@ max_tokens = 500
 
 ```rust
 pub struct SummarizeConfig {
-    /// Base URL for Anthropic-compatible API
-    pub base_url: String,      // default: "https://api.z.ai/api/anthropic"
+    /// Base URL for Anthropic-compatible API (required)
+    pub base_url: String,
 
-    /// API key (or use SUMMARIZER_API_KEY env var)
+    /// API key (required)
     pub api_key: Option<String>,
 
-    /// Model name
-    pub model: String,          // default: "glm-4.7"
+    /// Model name (required)
+    pub model: String,
 
     /// Max tokens in summary
     pub max_tokens: u32,        // default: 500
@@ -669,26 +669,15 @@ Note: Prompt is hardcoded in code (MVP approach) for simplicity.
 
 ### Примеры конфигураций
 
-**Z.ai GLM (default):**
+**Example configuration:**
 ```toml
 [thinking]
 mode = "summarize"
 
 [thinking.summarize]
-# Uses defaults: base_url = "https://api.z.ai/api/anthropic", model = "glm-4.7"
-# API key from SUMMARIZER_API_KEY env var
-max_tokens = 300
-```
-
-**Custom Anthropic-compatible endpoint:**
-```toml
-[thinking]
-mode = "summarize"
-
-[thinking.summarize]
-base_url = "https://your-endpoint.com/v1"
-api_key = "your-key"
-model = "custom-model"
+base_url = "https://your-api-endpoint.com"
+api_key = "your-api-key"
+model = "your-model-name"
 max_tokens = 500
 ```
 
