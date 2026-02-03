@@ -5,6 +5,7 @@ use crate::config::{
 };
 use crate::metrics::{DebugLogger, ObservabilityHub};
 use crate::proxy::shutdown::ShutdownManager;
+use crate::proxy::thinking::TransformerRegistry;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -48,10 +49,11 @@ fn test_config() -> Config {
 #[tokio::test]
 async fn ipc_switch_backend_and_status() {
     let config = test_config();
-    let backend_state = BackendState::from_config(config).expect("backend state");
+    let backend_state = BackendState::from_config(config.clone()).expect("backend state");
     let debug_logger = Arc::new(DebugLogger::new(DebugLoggingConfig::default()));
     let observability = ObservabilityHub::new(10).with_plugins(vec![debug_logger.clone()]);
     let shutdown = Arc::new(ShutdownManager::new());
+    let transformer_registry = Arc::new(TransformerRegistry::new(config.thinking.clone(), Some(debug_logger.clone())));
     let (client, server) = IpcLayer::new();
 
     let server_task = tokio::spawn(server.run(
@@ -60,6 +62,7 @@ async fn ipc_switch_backend_and_status() {
         debug_logger,
         shutdown,
         Instant::now(),
+        transformer_registry,
     ));
 
     let status = client.get_status().await.expect("status");

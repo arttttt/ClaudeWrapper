@@ -13,9 +13,8 @@ use crate::metrics::{
 };
 use crate::proxy::error::ProxyError;
 use crate::proxy::pool::PoolConfig;
-use crate::proxy::thinking::ThinkingTracker;
+use crate::proxy::thinking::{TransformContext, TransformerRegistry};
 use crate::proxy::timeout::TimeoutConfig;
-use parking_lot::RwLock;
 use std::sync::Arc;
 
 pub struct UpstreamClient {
@@ -23,7 +22,7 @@ pub struct UpstreamClient {
     timeout_config: TimeoutConfig,
     pool_config: PoolConfig,
     config: ConfigStore,
-    thinking_tracker: Arc<RwLock<ThinkingTracker>>,
+    transformer_registry: Arc<TransformerRegistry>,
     debug_logger: Arc<DebugLogger>,
     request_parser: RequestParser,
     response_parser: ResponseParser,
@@ -34,7 +33,7 @@ impl UpstreamClient {
         timeout_config: TimeoutConfig,
         pool_config: PoolConfig,
         config: ConfigStore,
-        thinking_tracker: Arc<RwLock<ThinkingTracker>>,
+        transformer_registry: Arc<TransformerRegistry>,
         debug_logger: Arc<DebugLogger>,
     ) -> Self {
         let client = Client::builder()
@@ -49,7 +48,7 @@ impl UpstreamClient {
             timeout_config,
             pool_config,
             config,
-            thinking_tracker,
+            transformer_registry,
             debug_logger,
             request_parser: RequestParser::new(true),
             response_parser: ResponseParser::new(),
@@ -177,40 +176,52 @@ impl UpstreamClient {
         }
 
         if request_content_type.contains("application/json") {
-            let mut tracker = self
-                .thinking_tracker
-                .write()
-                ;
-            tracker.set_mode(self.config.get().thinking.mode);
+            // Update transformer mode if config changed
+            self.transformer_registry
+                .update_mode(self.config.get().thinking.mode.clone())
+                .await;
 
-            let output = tracker.transform_request(&backend.name, &body_bytes);
+            // Parse JSON body for transformation
+            if let Ok(mut json_body) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                let context = TransformContext::new(
+                    backend.name.clone(),
+                    span.request_id().to_string(),
+                    path_and_query,
+                );
 
-            if output.result.changed {
-                if let Some(updated) = output.body {
-                    body_bytes = updated;
+                // Get transformer and apply transformation
+                let transformer = self.transformer_registry.get().await;
+
+                match transformer.transform_request(&mut json_body, &context).await {
+                    Ok(result) => {
+                        if result.changed {
+                            // Serialize back to bytes
+                            match serde_json::to_vec(&json_body) {
+                                Ok(updated) => {
+                                    body_bytes = updated;
+                                    tracing::info!(
+                                        backend = %backend.name,
+                                        transformer = transformer.name(),
+                                        stripped = result.stats.stripped_count,
+                                        "Transformed thinking blocks"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        error = %e,
+                                        "Failed to serialize transformed request body"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            "Failed to transform thinking blocks"
+                        );
+                    }
                 }
-                tracing::info!(
-                    backend = %backend.name,
-                    drop_count = output.result.drop_count,
-                    convert_count = output.result.convert_count,
-                    tag_count = output.result.tag_count,
-                    "Transformed thinking blocks"
-                );
-            }
-
-            // Debug: log request body (truncated) - only when transform happened
-            if output.result.changed {
-                let body_str = String::from_utf8_lossy(&body_bytes);
-                let truncated = if body_str.len() > 4000 {
-                    format!("{}...[truncated]", &body_str[..4000])
-                } else {
-                    body_str.to_string()
-                };
-                tracing::debug!(
-                    backend = %backend.name,
-                    body = %truncated,
-                    "Request body AFTER thinking transform"
-                );
             }
         }
 
@@ -357,13 +368,26 @@ impl UpstreamClient {
             } else {
                 None
             };
+
+            // Create callback to capture response for summarization
+            let registry = Arc::clone(&self.transformer_registry);
+            let on_complete: crate::metrics::ResponseCompleteCallback = Box::new(move |bytes| {
+                let registry = Arc::clone(&registry);
+                let bytes = bytes.to_vec();
+                tokio::spawn(async move {
+                    registry.on_response_complete(&bytes).await;
+                });
+            });
+
             let observed = ObservedStream::new(
                 stream,
                 span,
                 observability,
                 self.timeout_config.idle,
                 response_preview,
-            );
+            )
+            .with_on_complete(on_complete);
+
             Ok(response_builder.body(Body::from_stream(observed))?)
         } else {
             span.mark_first_byte();
@@ -451,15 +475,15 @@ impl Default for UpstreamClient {
             crate::config::Config::default(),
             crate::config::Config::config_path(),
         );
-        let tracker = Arc::new(RwLock::new(ThinkingTracker::new(
-            crate::config::ThinkingMode::DropSignature,
-        )));
+        let registry = Arc::new(TransformerRegistry::with_mode(
+            crate::config::ThinkingMode::Strip,
+        ));
         let debug_logger = Arc::new(DebugLogger::new(config.get().debug_logging.clone()));
         Self::new(
             TimeoutConfig::default(),
             PoolConfig::default(),
             config,
-            tracker,
+            registry,
             debug_logger,
         )
     }

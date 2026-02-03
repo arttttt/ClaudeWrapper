@@ -1,4 +1,4 @@
-//! Configuration management for claudewrapper.
+//! Configuration management for anyclaude.
 //!
 //! This module handles loading, parsing, and validating configuration
 //! from TOML files, as well as resolving API credentials from environment
@@ -17,5 +17,5 @@ pub use store::ConfigStore;
 pub use types::{
     Backend, BackendPricing, Config, DebugLogDestination, DebugLogFormat, DebugLogLevel,
     DebugLogRotation, DebugLogRotationMode, DebugLoggingConfig, Defaults, ProxyConfig,
-    TerminalConfig, ThinkingConfig, ThinkingMode,
+    SummarizeConfig, TerminalConfig, ThinkingConfig, ThinkingMode,
 };

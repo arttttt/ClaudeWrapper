@@ -3,7 +3,9 @@ use crate::error::ErrorRegistry;
 use crate::ipc::{BackendInfo, ProxyStatus};
 use crate::metrics::MetricsSnapshot;
 use crate::pty::PtyHandle;
+use crate::ui::mvi::Reducer;
 use crate::ui::pty_state::PtyState;
+use crate::ui::summarization::{SummarizeDialogState, SummarizeIntent, SummarizeReducer};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -25,6 +27,11 @@ pub enum Focus {
 #[derive(Debug)]
 pub enum UiCommand {
     SwitchBackend { backend_id: String },
+    /// Summarize session and then switch backend.
+    SummarizeAndSwitchBackend {
+        from_backend: String,
+        to_backend: String,
+    },
     RefreshStatus,
     RefreshMetrics { backend_id: Option<String> },
     RefreshBackends,
@@ -52,6 +59,16 @@ pub struct App {
     last_status_refresh: Instant,
     last_metrics_refresh: Instant,
     last_backends_refresh: Instant,
+    /// State of the summarization dialog (MVI pattern).
+    summarize_dialog: SummarizeDialogState,
+    /// Backend ID pending switch (waiting for summarization).
+    pending_backend_switch: Option<String>,
+    /// Selected button in failed state (0 = Retry, 1 = Cancel).
+    summarize_button_selection: u8,
+    /// Last animation tick for spinner.
+    last_animation_tick: Instant,
+    /// Scheduled time for next auto-retry (exponential backoff).
+    scheduled_retry_at: Option<Instant>,
 }
 
 impl App {
@@ -76,6 +93,11 @@ impl App {
             last_status_refresh: now,
             last_metrics_refresh: now,
             last_backends_refresh: now,
+            summarize_dialog: SummarizeDialogState::default(),
+            pending_backend_switch: None,
+            summarize_button_selection: 0,
+            last_animation_tick: now,
+            scheduled_retry_at: None,
         }
     }
 
@@ -290,6 +312,24 @@ impl App {
         })
     }
 
+    /// Request summarization and backend switch.
+    ///
+    /// Returns the target backend_id if command was sent successfully.
+    pub fn request_summarize_and_switch(&mut self, to_backend_id: String) -> Option<String> {
+        let from_backend = self.proxy_status.as_ref()
+            .map(|s| s.active_backend.clone())
+            .unwrap_or_default();
+
+        if self.send_command(UiCommand::SummarizeAndSwitchBackend {
+            from_backend,
+            to_backend: to_backend_id.clone(),
+        }) {
+            Some(to_backend_id)
+        } else {
+            None
+        }
+    }
+
     pub fn move_backend_selection(&mut self, direction: i32) {
         if self.backends.is_empty() {
             self.backend_selection = 0;
@@ -351,6 +391,107 @@ impl App {
     #[allow(dead_code)]
     pub fn config(&self) -> &ConfigStore {
         &self.config
+    }
+
+    // ========================================================================
+    // Summarization dialog methods (MVI pattern)
+    // ========================================================================
+
+    /// Get the current summarization dialog state.
+    pub fn summarize_dialog(&self) -> &SummarizeDialogState {
+        &self.summarize_dialog
+    }
+
+    /// Check if summarization dialog is visible.
+    pub fn is_summarize_dialog_visible(&self) -> bool {
+        !matches!(self.summarize_dialog, SummarizeDialogState::Hidden)
+    }
+
+    /// Dispatch an intent to the summarization dialog reducer.
+    pub fn dispatch_summarize(&mut self, intent: SummarizeIntent) {
+        self.summarize_dialog = SummarizeReducer::reduce(
+            std::mem::take(&mut self.summarize_dialog),
+            intent,
+        );
+    }
+
+    /// Start summarization for a backend switch.
+    pub fn start_summarization_for_switch(&mut self, backend_id: String) {
+        self.pending_backend_switch = Some(backend_id);
+        self.dispatch_summarize(SummarizeIntent::Start);
+        self.last_animation_tick = Instant::now();
+    }
+
+    /// Get the backend ID waiting for summarization.
+    pub fn pending_backend_switch(&self) -> Option<&str> {
+        self.pending_backend_switch.as_deref()
+    }
+
+    /// Complete the pending backend switch after successful summarization.
+    pub fn complete_summarization(&mut self) -> Option<String> {
+        self.dispatch_summarize(SummarizeIntent::Hide);
+        self.pending_backend_switch.take()
+    }
+
+    /// Cancel the pending backend switch.
+    pub fn cancel_summarization(&mut self) {
+        self.dispatch_summarize(SummarizeIntent::Hide);
+        self.pending_backend_switch = None;
+        self.scheduled_retry_at = None;
+    }
+
+    /// Get the currently selected button (0 = Retry, 1 = Cancel).
+    pub fn summarize_button_selection(&self) -> u8 {
+        self.summarize_button_selection
+    }
+
+    /// Toggle button selection.
+    pub fn toggle_summarize_button(&mut self) {
+        self.summarize_button_selection = if self.summarize_button_selection == 0 { 1 } else { 0 };
+    }
+
+    /// Reset button selection to default (Retry).
+    pub fn reset_summarize_button(&mut self) {
+        self.summarize_button_selection = 0;
+    }
+
+    /// Check and update animation tick. Returns true if tick should be sent.
+    pub fn should_animate(&mut self, interval: Duration) -> bool {
+        if self.is_summarize_dialog_visible() && self.last_animation_tick.elapsed() >= interval {
+            self.last_animation_tick = Instant::now();
+            return true;
+        }
+        false
+    }
+
+    /// Schedule a retry with exponential backoff.
+    /// Delay: 1s for attempt 1, 2s for attempt 2, 4s for attempt 3.
+    pub fn schedule_retry(&mut self, attempt: u8) {
+        let delay_secs = 1u64 << (attempt.saturating_sub(1).min(4)); // 1, 2, 4, 8, 16 max
+        self.scheduled_retry_at = Some(Instant::now() + Duration::from_secs(delay_secs));
+    }
+
+    /// Clear any scheduled retry.
+    pub fn clear_scheduled_retry(&mut self) {
+        self.scheduled_retry_at = None;
+    }
+
+    /// Check if a scheduled retry is due. Returns true and clears if due.
+    pub fn is_retry_due(&mut self) -> bool {
+        if let Some(scheduled) = self.scheduled_retry_at {
+            if Instant::now() >= scheduled {
+                self.scheduled_retry_at = None;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get seconds remaining until scheduled retry (for UI display).
+    pub fn retry_countdown_secs(&self) -> Option<u64> {
+        self.scheduled_retry_at.map(|scheduled| {
+            scheduled.saturating_duration_since(Instant::now()).as_secs()
+        })
     }
 
     fn send_command(&mut self, command: UiCommand) -> bool {

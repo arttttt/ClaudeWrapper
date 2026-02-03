@@ -1,23 +1,36 @@
-# ClaudeWrapper
+# AnyClaude
 
 TUI wrapper for Claude Code with hot-swappable backend support and transparent API proxying.
 
-**Note:** Only Anthropic API-compatible backends are supported (Anthropic, GLM, and other providers that implement the Anthropic API format).
+**Goal:** Make switching between API providers effortless. Configure all your backends once, then switch between them with a single hotkey — no config edits, no restarts, no interruptions.
+
+**Note:** Only Anthropic API-compatible backends are supported.
+
+## Why?
+
+Claude Code is great, but sometimes you need a different provider — maybe Anthropic is down, rate-limited, or you want to use another Anthropic-compatible backend. Without AnyClaude, switching means editing config files or environment variables every time.
+
+AnyClaude solves this:
+
+- Configure all backends once
+- Switch with `Ctrl+B` mid-session
+- No restarts, no config edits
 
 ## Features
 
-- **Hot-Swap Backends** — Switch between Anthropic, GLM, and other providers without restart
+- **Hot-Swap Backends** — Switch between providers without restarting Claude
+- **Session Context Preservation** — Summarize conversation on backend switch (summarize mode)
 - **Transparent Proxy** — Routes API requests through active backend
-- **Thinking Block Compatibility** — Transform thinking blocks between provider formats
+- **Thinking Block Handling** — Strip or summarize thinking blocks for cross-provider compatibility
 - **Live Configuration** — Config hot reload on file changes
-- **Image Paste** — Paste images from clipboard
-- **Metrics** — Request latency, error tracking (Ctrl+S)
+- **Image Paste** — Paste images from clipboard (Ctrl+V)
+- **Debug Logging** — Request/response logging with configurable detail levels
 
 ## Architecture
 
 ```
 ┌─────────────────────────────┐
-│     ClaudeWrapper TUI       │
+│     AnyClaude TUI       │
 └──────────────┬──────────────┘
                │
         ┌──────▼──────┐
@@ -31,7 +44,7 @@ TUI wrapper for Claude Code with hot-swappable backend support and transparent A
                │
      ┌─────────┼─────────┐
      ▼         ▼         ▼
- Anthropic    GLM      Other
+ Backend1  Backend2   Backend3
 ```
 
 ## Building
@@ -43,7 +56,7 @@ cargo build --release
 ## Usage
 
 ```bash
-./target/release/claudewrapper
+./target/release/anyclaude
 ```
 
 The wrapper automatically:
@@ -54,14 +67,37 @@ The wrapper automatically:
 
 ### Hotkeys
 
-- `Ctrl+B` — Backend switcher
-- `Ctrl+S` — Status/metrics popup
-- `Ctrl+Q` — Quit
-- `1-9` — Quick-select backend (in switcher)
+| Key | Action |
+|-----|--------|
+| `Ctrl+B` | Backend switcher popup |
+| `Ctrl+S` | Status/metrics popup |
+| `Ctrl+V` | Paste image from clipboard |
+| `Ctrl+Q` | Quit |
+| `1-9` | Quick-select backend (in switcher) |
 
 ## Configuration
 
-Config location: `~/.config/claude-wrapper/config.toml`
+Config location: `~/.config/anyclaude/config.toml`
+
+### Minimal Example
+
+```toml
+[defaults]
+active = "anthropic"
+
+[[backends]]
+name = "anthropic"
+display_name = "Anthropic"
+base_url = "https://api.anthropic.com"
+auth_type = "passthrough"  # Forward Claude Code's auth headers
+
+[[backends]]
+name = "alternative"
+display_name = "Alternative Provider"
+base_url = "https://your-provider.com/api"
+auth_type = "bearer"
+api_key = "your-api-key"
+```
 
 ### Full Example
 
@@ -84,21 +120,31 @@ base_url = "http://127.0.0.1:8080"
 scrollback_lines = 10000          # History buffer size
 
 [thinking]
-mode = "drop_signature"           # See "Thinking Block Modes" below
+mode = "summarize"                # "strip" or "summarize"
+
+[thinking.summarize]
+base_url = "https://your-summarizer-api.com"  # Anthropic-compatible API
+api_key = "your-summarizer-api-key"           # API key for summarization
+model = "your-model-name"                     # Model for summarization
+max_tokens = 500                              # Max tokens in summary
+
+[debug_logging]
+enabled = true
+level = "verbose"                 # "basic", "verbose", or "full"
+path = "~/.config/anyclaude/debug.log"
 
 [[backends]]
 name = "anthropic"
 display_name = "Anthropic"
 base_url = "https://api.anthropic.com"
-auth_type = "api_key"
-api_key_env = "ANTHROPIC_API_KEY"
+auth_type = "passthrough"         # Forward Claude Code's auth headers
 
 [[backends]]
-name = "glm"
-display_name = "GLM-4 (Z.AI)"
-base_url = "https://open.bigmodel.cn/api/paas/v4"
+name = "alternative"
+display_name = "Alternative Provider"
+base_url = "https://your-provider.com/api"
 auth_type = "bearer"
-api_key_env = "GLM_API_KEY"
+api_key = "your-api-key"
 
 [[backends]]
 name = "custom"
@@ -112,20 +158,65 @@ auth_type = "passthrough"         # Forward original auth headers
 | Type | Header | Use Case |
 |------|--------|----------|
 | `api_key` | `x-api-key: <value>` | Anthropic API |
-| `bearer` | `Authorization: Bearer <value>` | Most providers (GLM, OpenAI-compatible) |
+| `bearer` | `Authorization: Bearer <value>` | Most providers |
 | `passthrough` | Forwards original headers | OAuth flows, custom auth |
-
-API keys can be specified directly (`api_key = "sk-..."`) or via environment variable (`api_key_env = "ENV_VAR_NAME"`).
 
 ### Thinking Block Modes
 
-When switching between providers, thinking blocks may need transformation:
+When switching between providers, thinking blocks need special handling due to signature validation:
 
-| Mode | Behavior |
-|------|----------|
-| `drop_signature` | Removes provider-specific signature, keeps thinking block structure |
-| `convert_to_text` | Converts thinking blocks to plain text content |
-| `convert_to_tags` | Wraps thinking content in `<think>...</think>` tags |
+| Mode | Behavior | Backend Switch |
+|------|----------|----------------|
+| `strip` | Removes all thinking blocks from requests | Instant, no context preserved |
+| `summarize` | Summarizes session via external LLM on backend switch | Context preserved as summary |
+
+**Recommended:** Use `summarize` mode for most cases — it preserves conversation context when switching backends.
+
+#### Strip Mode
+
+```toml
+[thinking]
+mode = "strip"
+```
+
+Completely removes thinking blocks from message history. Fast and stable, but loses thinking context between turns.
+
+#### Summarize Mode (Recommended)
+
+```toml
+[thinking]
+mode = "summarize"
+
+[thinking.summarize]
+base_url = "https://your-summarizer-api.com"  # Anthropic-compatible API
+api_key = "your-summarizer-api-key"           # API key for summarization
+model = "your-model-name"                     # Model for summarization
+max_tokens = 500                              # Max tokens in summary
+```
+
+When you switch backends:
+1. Current session history is summarized via the configured LLM
+2. Summary is prepended to the first message on the new backend
+3. New backend receives context: `[CONTEXT FROM PREVIOUS SESSION]...[/CONTEXT FROM PREVIOUS SESSION]`
+
+This allows seamless backend switching while preserving conversation context.
+
+### Debug Logging
+
+Enable detailed request/response logging for debugging:
+
+```toml
+[debug_logging]
+enabled = true
+level = "verbose"   # "basic" | "verbose" | "full"
+path = "~/.config/anyclaude/debug.log"
+```
+
+| Level | Content |
+|-------|---------|
+| `basic` | Request timestamps, status codes, latency |
+| `verbose` | + Token counts, model info, cost estimates |
+| `full` | + Request/response body previews, headers |
 
 ## License
 

@@ -2,7 +2,7 @@
 
 ## Проблема
 
-При использовании ClaudeWrapper в режиме `convert_to_tags` thinking блоки конвертируются в обычный текст с тегами `<think>...</think>`. Это создаёт проблемы:
+При использовании AnyClaude в режиме `convert_to_tags` thinking блоки конвертируются в обычный текст с тегами `<think>...</think>`. Это создаёт проблемы:
 
 1. **Накопление контекста**: API Anthropic не распознаёт `<think>` как thinking блоки и не применяет автоматическое stripping/суммаризацию
 2. **Потеря суммаризации**: Anthropic использует отдельную модель для суммаризации thinking блоков — при конвертации в текст эта функция теряется
@@ -171,8 +171,8 @@ ThinkingMode::Strip => {
 4. Нет дополнительных API вызовов
 
 **При переключении backend:**
-1. Пользователь запрашивает смену backend (например, Anthropic → GLM)
-2. ClaudeWrapper показывает UI: "Preparing switch..."
+1. Пользователь запрашивает смену backend (например, Anthropic → Provider B)
+2. AnyClaude показывает UI: "Preparing switch..."
 3. Для каждого assistant message в истории:
    - Thinking блоки → суммаризируются через summarizer модель
    - Tool_use + tool_result блоки → суммаризируются в список действий
@@ -194,10 +194,10 @@ mode = "summarize"
 
 [thinking.summarizer]
 # Какой backend использовать для суммаризации
-backend = "glm"  # Имя из секции [[backends]]
+backend = "provider-b"  # Имя из секции [[backends]]
 
 # Опционально: конкретная модель (если backend поддерживает несколько)
-model = "glm-4-flash"
+model = "model-name"
 
 # Максимальное количество токенов в резюме
 max_tokens = 500
@@ -275,12 +275,12 @@ ACTIONS:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                  ClaudeWrapper (summarize mode)                  │
+│                  AnyClaude (summarize mode)                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  [Обычная работа: thinking нативный, API сам его обрабатывает]  │
 │                                                                  │
-│  User: "Switch to GLM"                                          │
+│  User: "Switch to Provider B"                                          │
 │           │                                                      │
 │           ▼                                                      │
 │  ┌─────────────────────────────────────────┐                    │
@@ -308,12 +308,12 @@ ACTIONS:
 │           │                                                      │
 │           ▼                                                      │
 │  ┌─────────────────────────────────────────┐                    │
-│  │ Переключить active backend → GLM        │                    │
+│  │ Переключить active backend → Provider B        │                    │
 │  │ Claude продолжает без перезапуска       │                    │
 │  └─────────────────────────────────────────┘                    │
 │           │                                                      │
 │           ▼                                                      │
-│  Пользователь продолжает работу с GLM backend                   │
+│  Пользователь продолжает работу с Provider B backend                   │
 │  (thinking резюме сохранены в истории как text)                 │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -493,10 +493,10 @@ Thinking блоки сохраняются в нативном формате AP
 3. Переключение backends **заблокировано**
 
 **При попытке переключения backend:**
-1. ClaudeWrapper показывает предупреждение
+1. AnyClaude показывает предупреждение
 2. Пользователь подтверждает переключение
 3. Текущая сессия Claude получает запрос на создание handoff summary
-4. Summary сохраняется в память ClaudeWrapper
+4. Summary сохраняется в память AnyClaude
 5. Текущий процесс Claude завершается
 6. Новый процесс Claude запускается с новым backend
 7. Handoff summary инжектится в новую сессию
@@ -535,10 +535,10 @@ handoff_inject_method = "first_message"  # "first_message" | "system_prompt" | "
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    ClaudeWrapper (native mode)                   │
+│                    AnyClaude (native mode)                   │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  User: "Switch to GLM"                                          │
+│  User: "Switch to Provider B"                                          │
 │           │                                                      │
 │           ▼                                                      │
 │  ┌─────────────────────────────────────────┐                    │
@@ -563,7 +563,7 @@ handoff_inject_method = "first_message"  # "first_message" | "system_prompt" | "
 │  ┌─────────────────────────────────────────┐                    │
 │  │ Store summary in memory                 │                    │
 │  │ Kill Claude process (anthropic)         │                    │
-│  │ Start Claude process (glm)              │                    │
+│  │ Start Claude process (provider-b)              │                    │
 │  └─────────────────────────────────────────┘                    │
 │           │                                                      │
 │           ▼                                                      │
@@ -573,7 +573,7 @@ handoff_inject_method = "first_message"  # "first_message" | "system_prompt" | "
 │  └─────────────────────────────────────────┘                    │
 │           │                                                      │
 │           ▼                                                      │
-│  New session continues with GLM backend                         │
+│  New session continues with Provider B backend                         │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -663,10 +663,10 @@ mode = "strip"
 # ============================================
 [thinking.summarizer]
 # Backend для суммаризации (из [[backends]])
-backend = "glm"
+backend = "provider-b"
 
 # Конкретная модель (опционально, если backend поддерживает)
-model = "glm-4-flash"
+model = "model-name"
 
 # Максимум токенов в резюме
 max_tokens = 500
@@ -711,7 +711,7 @@ handoff_inject_method = "first_message"
 
 # Сохранять handoff на диск
 persist_handoff = false
-handoff_path = "~/.cache/claudewrapper/handoffs/"
+handoff_path = "~/.cache/anyclaude/handoffs/"
 ```
 
 ### Миграция с текущего конфига
@@ -733,35 +733,40 @@ mode = "strip"
 
 ## План реализации
 
-### Фаза 1: `strip` режим
+### Фаза 1: `strip` режим ✅ ГОТОВО
 **Приоритет: Высокий**
 **Сложность: Низкая**
 
-- [ ] Добавить `Strip` вариант в `ThinkingMode` enum
-- [ ] Реализовать удаление thinking блоков в `transform_request`
-- [ ] Обновить конфиг парсер
-- [ ] Добавить тесты
-- [ ] Обновить документацию
-- [ ] Deprecate `convert_to_tags` режим
+- [x] Добавить `Strip` вариант в `ThinkingMode` enum
+- [x] Реализовать удаление thinking блоков в `transform_request`
+- [x] Обновить конфиг парсер
+- [x] Добавить тесты
+- [x] Обновить документацию
+- [x] Deprecate `convert_to_tags` режим
 
-### Фаза 2: `summarize` режим (рекомендуемый)
+### Фаза 2: `summarize` режим (рекомендуемый) 🔄 В ПРОЦЕССЕ
 **Приоритет: Высокий**
 **Сложность: Средняя**
 
 Ключевое отличие от первоначального дизайна: суммаризация происходит **только при переключении backend**, а не на каждый запрос.
 
-- [ ] Реализовать passthrough thinking блоков при обычной работе
-- [ ] Спроектировать интерфейс `ThinkingSummarizer`
-- [ ] Реализовать HTTP клиент для summarizer
-- [ ] Добавить конфигурацию `[thinking.summarizer]`
-- [ ] Интегрировать в логику `switch_backend`
+- [x] Реализовать passthrough thinking блоков при обычной работе
+- [x] Спроектировать интерфейс `ThinkingSummarizer`
+- [x] Реализовать HTTP клиент для summarizer (`SummarizerClient`)
+- [x] Добавить конфигурацию `[thinking.summarizer]`
+- [x] Интегрировать в логику `switch_backend` (через `SummarizeTransformer`)
+- [x] Сохранение сообщений и prepend summary к следующему запросу
+- [x] Захват streaming response через `ObservedStream` callback
+- [x] Фильтрация `<system-reminder>` тегов из суммаризации
+- [x] Защита от перезаписи auxiliary запросами (count_tokens, title generation)
+- [x] Форматирование с закрывающими тегами `[/USER]`, `[/ASSISTANT]`
+- [x] Добавить тесты
 - [ ] Добавить UI прогресса "Preparing switch..."
 - [ ] Реализовать кэширование (опционально)
 - [ ] Добавить fallback на `strip` при ошибках
-- [ ] Добавить тесты
 - [ ] Написать документацию
 
-### Фаза 3: `native` режим
+### Фаза 3: `native` режим ❌ НЕ НАЧАТО
 **Приоритет: Низкий**
 **Сложность: Высокая**
 

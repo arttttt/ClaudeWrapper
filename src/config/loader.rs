@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::config::credentials::CredentialStatus;
-use crate::config::types::{Backend, Config};
+use crate::config::types::{Backend, Config, ThinkingMode};
 
 /// Errors that can occur when loading configuration.
 #[derive(Debug, Error)]
@@ -30,13 +30,13 @@ pub enum ConfigError {
 impl Config {
     /// Returns the path to the configuration file.
     ///
-    /// Uses `~/.config/claude-wrapper/config.toml` on Unix/macOS.
+    /// Uses `~/.config/anyclaude/config.toml` on Unix/macOS.
     /// Falls back to current directory if home is unavailable.
     pub fn config_path() -> PathBuf {
         let config_dir = dirs::home_dir()
             .map(|h| h.join(".config"))
             .unwrap_or_else(|| PathBuf::from("."));
-        config_dir.join("claude-wrapper").join("config.toml")
+        config_dir.join("anyclaude").join("config.toml")
     }
 
     /// Loads configuration from the default config file.
@@ -127,6 +127,32 @@ impl Config {
                         ),
                     });
                 }
+            }
+        }
+
+        // Validate summarize mode has all required fields configured
+        if self.thinking.mode == ThinkingMode::Summarize {
+            let cfg = &self.thinking.summarize;
+
+            if cfg.base_url.is_empty() {
+                return Err(ConfigError::ValidationError {
+                    message: "Summarize mode requires 'base_url' in [thinking.summarize] section."
+                        .to_string(),
+                });
+            }
+
+            if cfg.api_key.is_none() {
+                return Err(ConfigError::ValidationError {
+                    message: "Summarize mode requires 'api_key' in [thinking.summarize] section."
+                        .to_string(),
+                });
+            }
+
+            if cfg.model.is_empty() {
+                return Err(ConfigError::ValidationError {
+                    message: "Summarize mode requires 'model' in [thinking.summarize] section."
+                        .to_string(),
+                });
             }
         }
 

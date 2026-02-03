@@ -1,5 +1,5 @@
 [package]
-name = "claudewrapper"
+name = "anyclaude"
 version = "0.1.2"
 edition = "2021"
 
@@ -37,6 +37,9 @@ fs2 = "0.4"
 
 # Concurrency
 parking_lot = "0.12"
+
+# Async traits
+async-trait = "0.1"
 
 # Utilities
 scopeguard = "1.2"

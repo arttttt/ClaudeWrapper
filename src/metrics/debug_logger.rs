@@ -21,6 +21,15 @@ use crate::metrics::{
 
 const LOG_CHANNEL_SIZE: usize = 512;
 
+/// Log event types for the debug logger channel.
+#[derive(Debug, Clone)]
+pub enum LogEvent {
+    /// Standard proxy request/response event.
+    Request(DebugLogEvent),
+    /// Auxiliary event (summarizer, internal operations).
+    Auxiliary(AuxiliaryLogEvent),
+}
+
 #[derive(Debug, Clone)]
 pub struct DebugLogEvent {
     pub timestamp: SystemTime,
@@ -39,10 +48,25 @@ pub struct DebugLogEvent {
     pub response_meta: Option<ResponseMeta>,
 }
 
+/// Auxiliary log event for internal operations (summarizer, etc).
+#[derive(Debug, Clone)]
+pub struct AuxiliaryLogEvent {
+    pub timestamp: SystemTime,
+    pub operation: String,
+    pub status: Option<u16>,
+    pub latency_ms: Option<u64>,
+    pub message: Option<String>,
+    pub error: Option<String>,
+    /// Request body (for verbose logging).
+    pub request_body: Option<String>,
+    /// Response body (for verbose logging).
+    pub response_body: Option<String>,
+}
+
 pub struct DebugLogger {
     level: AtomicU8,
     config: Arc<RwLock<DebugLoggingConfig>>,
-    sender: SyncSender<DebugLogEvent>,
+    sender: SyncSender<LogEvent>,
 }
 
 impl DebugLogger {
@@ -76,6 +100,46 @@ impl DebugLogger {
             .store(level_to_u8(config.level), Ordering::Relaxed);
         *self.config.write() = config;
     }
+
+    /// Log an auxiliary event (summarizer, internal operations).
+    pub fn log_auxiliary(
+        &self,
+        operation: &str,
+        status: Option<u16>,
+        latency_ms: Option<u64>,
+        message: Option<&str>,
+        error: Option<&str>,
+    ) {
+        self.log_auxiliary_full(operation, status, latency_ms, message, error, None, None);
+    }
+
+    /// Log an auxiliary event with request/response bodies (for verbose debugging).
+    pub fn log_auxiliary_full(
+        &self,
+        operation: &str,
+        status: Option<u16>,
+        latency_ms: Option<u64>,
+        message: Option<&str>,
+        error: Option<&str>,
+        request_body: Option<&str>,
+        response_body: Option<&str>,
+    ) {
+        if self.level() == DebugLogLevel::Off {
+            return;
+        }
+
+        let event = AuxiliaryLogEvent {
+            timestamp: SystemTime::now(),
+            operation: operation.to_string(),
+            status,
+            latency_ms,
+            message: message.map(|s| s.to_string()),
+            error: error.map(|s| s.to_string()),
+            request_body: request_body.map(|s| s.to_string()),
+            response_body: response_body.map(|s| s.to_string()),
+        };
+        let _ = self.sender.try_send(LogEvent::Auxiliary(event));
+    }
 }
 
 impl ObservabilityPlugin for DebugLogger {
@@ -86,7 +150,7 @@ impl ObservabilityPlugin for DebugLogger {
         }
 
         let event = DebugLogEvent::from_record(ctx.record, level);
-        let _ = self.sender.try_send(event);
+        let _ = self.sender.try_send(LogEvent::Request(event));
     }
 }
 
@@ -112,28 +176,43 @@ impl DebugLogEvent {
     }
 }
 
-fn writer_loop(receiver: Receiver<DebugLogEvent>, config: Arc<RwLock<DebugLoggingConfig>>) {
+fn writer_loop(receiver: Receiver<LogEvent>, config: Arc<RwLock<DebugLoggingConfig>>) {
     let mut stderr = io::stderr();
     let mut file_writer: Option<RotatingFile> = None;
     let mut last_file_path: Option<String> = None;
 
-    while let Ok(event) = receiver.recv() {
+    while let Ok(log_event) = receiver.recv() {
         let config_snapshot = config.read().clone();
         if config_snapshot.level == DebugLogLevel::Off {
             continue;
         }
 
-        let level = min(event.level, config_snapshot.level);
         let use_color = stderr.is_terminal() && config_snapshot.format == DebugLogFormat::Console;
-        let (line_console, line_file) = match config_snapshot.format {
-            DebugLogFormat::Console => (
-                format_console(&event, level, use_color),
-                format_console(&event, level, false),
-            ),
-            DebugLogFormat::Json => {
-                let line = format_json(&event, level);
-                (line.clone(), line)
+
+        let (line_console, line_file) = match log_event {
+            LogEvent::Request(event) => {
+                let level = min(event.level, config_snapshot.level);
+                match config_snapshot.format {
+                    DebugLogFormat::Console => (
+                        format_console(&event, level, use_color),
+                        format_console(&event, level, false),
+                    ),
+                    DebugLogFormat::Json => {
+                        let line = format_json(&event, level);
+                        (line.clone(), line)
+                    }
+                }
             }
+            LogEvent::Auxiliary(event) => match config_snapshot.format {
+                DebugLogFormat::Console => (
+                    format_auxiliary_console(&event, use_color),
+                    format_auxiliary_console(&event, false),
+                ),
+                DebugLogFormat::Json => {
+                    let line = format_auxiliary_json(&event);
+                    (line.clone(), line)
+                }
+            },
         };
 
         match config_snapshot.destination {
@@ -251,6 +330,83 @@ fn format_console(event: &DebugLogEvent, level: DebugLogLevel, use_color: bool) 
     }
 
     line
+}
+
+fn format_auxiliary_console(event: &AuxiliaryLogEvent, use_color: bool) -> String {
+    let timestamp = format_timestamp(event.timestamp);
+    let status = event.status.map_or("-".to_string(), |s| s.to_string());
+    let status_display = if use_color {
+        colorize_status(&status, event.status)
+    } else {
+        status.clone()
+    };
+    let latency = event.latency_ms.map_or("-".to_string(), |v| v.to_string());
+
+    // Header with separator for visibility
+    let separator = if use_color {
+        "\x1b[36m───────────────────────────────────────────────────────────────────────\x1b[0m"
+    } else {
+        "───────────────────────────────────────────────────────────────────────"
+    };
+
+    let op_display = if use_color {
+        format!("\x1b[1;33m[{}]\x1b[0m", event.operation.to_uppercase())
+    } else {
+        format!("[{}]", event.operation.to_uppercase())
+    };
+
+    let mut line = format!(
+        "{}\n{} {} status={} latency_ms={}",
+        separator, timestamp, op_display, status_display, latency
+    );
+
+    if let Some(msg) = &event.message {
+        line.push_str(&format!("\n  message: {}", msg));
+    }
+
+    if let Some(err) = &event.error {
+        let err_display = if use_color {
+            format!("\x1b[31m{}\x1b[0m", err)
+        } else {
+            err.clone()
+        };
+        line.push_str(&format!("\n  error: {}", err_display));
+    }
+
+    // Show request/response bodies if present
+    if let Some(req) = &event.request_body {
+        line.push_str(&format!("\n  request_body:\n{}", indent_text(req, 4)));
+    }
+
+    if let Some(resp) = &event.response_body {
+        line.push_str(&format!("\n  response_body:\n{}", indent_text(resp, 4)));
+    }
+
+    line
+}
+
+/// Indent each line of text by the given number of spaces.
+fn indent_text(text: &str, spaces: usize) -> String {
+    let indent = " ".repeat(spaces);
+    text.lines()
+        .map(|line| format!("{}{}", indent, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_auxiliary_json(event: &AuxiliaryLogEvent) -> String {
+    let value = json!({
+        "ts": format_timestamp(event.timestamp),
+        "type": "auxiliary",
+        "operation": event.operation,
+        "status": event.status,
+        "latency_ms": event.latency_ms,
+        "message": event.message,
+        "error": event.error,
+        "request_body": event.request_body,
+        "response_body": event.response_body,
+    });
+    value.to_string()
 }
 
 fn colorize_status(value: &str, status: Option<u16>) -> String {

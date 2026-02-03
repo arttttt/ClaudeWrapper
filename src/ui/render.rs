@@ -3,6 +3,7 @@ use crate::ui::app::{App, PopupKind};
 use crate::ui::footer::Footer;
 use crate::ui::header::Header;
 use crate::ui::layout::{centered_rect_by_size, layout_regions};
+use crate::ui::summarization::render_summarize_dialog;
 use crate::ui::terminal::TerminalBody;
 use crate::ui::theme::{
     ACTIVE_HIGHLIGHT, CLAUDE_ORANGE, HEADER_TEXT, POPUP_BORDER, STATUS_ERROR, STATUS_OK,
@@ -298,6 +299,16 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             .border_style(Style::default().fg(POPUP_BORDER));
         let widget = Paragraph::new(lines).block(popup);
         frame.render_widget(widget, area);
+
+        // Render summarization dialog on top of backend switch popup
+        if matches!(kind, PopupKind::BackendSwitch) && app.is_summarize_dialog_visible() {
+            render_summarize_dialog(
+                frame,
+                app.summarize_dialog(),
+                app.summarize_button_selection(),
+                app.retry_countdown_secs(),
+            );
+        }
     }
 }
 
