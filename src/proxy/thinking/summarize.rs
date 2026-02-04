@@ -10,7 +10,6 @@ use crate::metrics::DebugLogger;
 
 use super::context::{TransformContext, TransformResult, TransformStats};
 use super::error::TransformError;
-use super::strip::{remove_context_management, strip_thinking_blocks};
 use super::summarizer::SummarizerClient;
 use super::traits::ThinkingTransformer;
 
@@ -193,13 +192,9 @@ impl ThinkingTransformer for SummarizeTransformer {
             }
         }
 
-        // 3. Strip thinking blocks (they're captured in summary if we switched)
-        stats.stripped_count = strip_thinking_blocks(body);
-
-        // Remove context_management if we stripped anything
-        if stats.stripped_count > 0 {
-            remove_context_management(body);
-        }
+        // Note: We do NOT strip thinking blocks here anymore.
+        // Thinking blocks are stripped lazily only when we get a 400 error
+        // with invalid signature, then retry with stripped body.
 
         Ok(TransformResult::with_stats(stats))
     }
@@ -340,7 +335,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn strips_thinking_blocks() {
+    async fn does_not_strip_thinking_blocks_eagerly() {
+        // SummarizeTransformer no longer strips thinking blocks eagerly.
+        // Stripping happens lazily on 400 retry in upstream.rs
         let transformer = SummarizeTransformer::new(make_config(), None);
         let mut body = json!({
             "messages": [{
@@ -357,12 +354,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(result.changed);
-        assert_eq!(result.stats.stripped_count, 1);
+        // No stripping should occur
+        assert!(!result.changed);
+        assert_eq!(result.stats.stripped_count, 0);
 
+        // Thinking blocks should still be there
         let content = body["messages"][0]["content"].as_array().unwrap();
-        assert_eq!(content.len(), 1);
-        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "thinking");
     }
 
     #[tokio::test]

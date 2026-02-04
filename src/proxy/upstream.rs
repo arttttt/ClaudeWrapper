@@ -1,4 +1,4 @@
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::http::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST};
 use axum::http::{Request, Response};
 use http_body_util::BodyExt;
@@ -13,7 +13,9 @@ use crate::metrics::{
 };
 use crate::proxy::error::ProxyError;
 use crate::proxy::pool::PoolConfig;
-use crate::proxy::thinking::{TransformContext, TransformerRegistry};
+use crate::proxy::thinking::{
+    remove_context_management, strip_thinking_blocks, TransformContext, TransformerRegistry,
+};
 use crate::proxy::timeout::TimeoutConfig;
 use std::sync::Arc;
 
@@ -143,7 +145,7 @@ impl UpstreamClient {
                 return Err(err);
             }
         };
-        let mut body_bytes = body_bytes.to_vec();
+        let body_bytes = body_bytes.to_vec();
         let request_content_type = headers
             .get(CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
@@ -175,13 +177,14 @@ impl UpstreamClient {
             );
         }
 
+        // Apply transformer for summarization (prepend summary, save messages)
+        // Note: This does NOT strip thinking blocks - that happens lazily on 400 retry
+        let mut body_bytes = body_bytes;
         if request_content_type.contains("application/json") {
-            // Update transformer mode if config changed
             self.transformer_registry
                 .update_mode(self.config.get().thinking.mode.clone())
                 .await;
 
-            // Parse JSON body for transformation
             if let Ok(mut json_body) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
                 let context = TransformContext::new(
                     backend.name.clone(),
@@ -189,21 +192,19 @@ impl UpstreamClient {
                     path_and_query,
                 );
 
-                // Get transformer and apply transformation
                 let transformer = self.transformer_registry.get().await;
 
                 match transformer.transform_request(&mut json_body, &context).await {
                     Ok(result) => {
                         if result.changed {
-                            // Serialize back to bytes
                             match serde_json::to_vec(&json_body) {
                                 Ok(updated) => {
                                     body_bytes = updated;
                                     tracing::info!(
                                         backend = %backend.name,
                                         transformer = transformer.name(),
-                                        stripped = result.stats.stripped_count,
-                                        "Transformed thinking blocks"
+                                        summarized = result.stats.summarized_count,
+                                        "Applied transformer"
                                     );
                                 }
                                 Err(e) => {
@@ -218,12 +219,15 @@ impl UpstreamClient {
                     Err(e) => {
                         tracing::error!(
                             error = %e,
-                            "Failed to transform thinking blocks"
+                            "Failed to apply transformer"
                         );
                     }
                 }
             }
         }
+
+        // Save original body for potential retry with thinking block strip
+        let original_body_bytes = body_bytes.clone();
 
         span.set_request_bytes(body_bytes.len());
         let auth_header = build_auth_header(&backend);
@@ -329,6 +333,144 @@ impl UpstreamClient {
             .map_or(false, |ct| ct.contains("text/event-stream"));
 
         let status = upstream_resp.status();
+
+        // Lazy strip with retry: if we get a 400 error that looks like a thinking
+        // signature error, strip thinking blocks and retry once.
+        //
+        // For 400 errors, we need to read the body to check if it's a thinking error.
+        // We store the response headers before consuming the body, and return either:
+        // - A new response from retry (if successful)
+        // - The pre-read body with saved headers (if retry failed or not a thinking error)
+        let (upstream_resp, status, response_headers, pre_read_body) =
+            if status == reqwest::StatusCode::BAD_REQUEST && !is_streaming {
+                // Save headers before consuming response body
+                let saved_headers = upstream_resp.headers().clone();
+
+                // Read the error body to check if it's a thinking signature error
+                let error_body = match upstream_resp.bytes().await {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        let err =
+                            ProxyError::Internal(format!("Failed to read error body: {}", e));
+                        observability.finish_error(span, Some(400));
+                        return Err(err);
+                    }
+                };
+
+                // Log the 400 error body for debugging
+                let error_body_preview = String::from_utf8_lossy(&error_body);
+                let error_preview = if error_body_preview.len() > 500 {
+                    format!("{}...[truncated]", &error_body_preview[..500])
+                } else {
+                    error_body_preview.to_string()
+                };
+                tracing::debug!(
+                    backend = %backend.name,
+                    error_body = %error_preview,
+                    "Received 400 error, checking for thinking signature error"
+                );
+
+                if is_thinking_signature_error(&error_body) {
+                    tracing::info!(
+                        backend = %backend.name,
+                        "Detected thinking signature error, stripping thinking blocks and retrying"
+                    );
+
+                    // Try to strip thinking blocks from original body
+                    let retry_body = if let Ok(mut json_body) =
+                        serde_json::from_slice::<serde_json::Value>(&original_body_bytes)
+                    {
+                        let stripped = strip_thinking_blocks(&mut json_body);
+                        if stripped > 0 {
+                            remove_context_management(&mut json_body);
+                            tracing::info!(
+                                backend = %backend.name,
+                                stripped_count = stripped,
+                                "Stripped thinking blocks for retry"
+                            );
+                            serde_json::to_vec(&json_body).ok()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(retry_body) = retry_body {
+                        tracing::debug!(
+                            backend = %backend.name,
+                            retry_body_len = retry_body.len(),
+                            "Prepared retry body after stripping thinking blocks"
+                        );
+                        // Retry with stripped body
+                        let mut retry_builder = self.client.request(method.clone(), &upstream_uri);
+                        let strip_auth_headers = backend.auth_type().uses_own_credentials();
+
+                        for (name, value) in headers.iter() {
+                            if name == HOST || name == CONTENT_LENGTH {
+                                continue;
+                            }
+                            if strip_auth_headers
+                                && (name == AUTHORIZATION
+                                    || name.as_str().eq_ignore_ascii_case("x-api-key"))
+                            {
+                                continue;
+                            }
+                            retry_builder = retry_builder.header(name, value);
+                        }
+
+                        if let Some((name, value)) = auth_header.as_ref() {
+                            retry_builder = retry_builder.header(name, value);
+                        }
+
+                        match retry_builder
+                            .timeout(self.timeout_config.request)
+                            .body(retry_body)
+                            .send()
+                            .await
+                        {
+                            Ok(retry_resp) => {
+                                let retry_status = retry_resp.status();
+                                let retry_headers = retry_resp.headers().clone();
+                                tracing::info!(
+                                    backend = %backend.name,
+                                    status = %retry_status,
+                                    "Retry after thinking strip completed"
+                                );
+                                (Some(retry_resp), retry_status, retry_headers, None)
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    backend = %backend.name,
+                                    error = %e,
+                                    "Retry after thinking strip failed, returning original error"
+                                );
+                                // Return original 400 error with pre-read body
+                                (None, status, saved_headers, Some(error_body.to_vec()))
+                            }
+                        }
+                    } else {
+                        // Couldn't strip, return original error
+                        tracing::warn!(
+                            backend = %backend.name,
+                            "Could not strip thinking blocks (none found or JSON parse failed), returning original 400 error"
+                        );
+                        (None, status, saved_headers, Some(error_body.to_vec()))
+                    }
+                } else {
+                    // Not a thinking error, pass through with pre-read body
+                    tracing::debug!(
+                        backend = %backend.name,
+                        error_body = %error_preview,
+                        "400 error is not a thinking signature error, passing through"
+                    );
+                    (None, status, saved_headers, Some(error_body.to_vec()))
+                }
+            } else {
+                let resp_headers = upstream_resp.headers().clone();
+                (Some(upstream_resp), status, resp_headers, None)
+            };
+
         span.set_status(status.as_u16());
 
         if debug_level >= DebugLogLevel::Full && debug_config.header_preview {
@@ -339,7 +481,7 @@ impl UpstreamClient {
                     headers: None,
                     body_preview: None,
                 });
-            meta.headers = Some(redact_headers(upstream_resp.headers()));
+            meta.headers = Some(redact_headers(&response_headers));
         }
 
         // Log error responses for debugging
@@ -354,11 +496,13 @@ impl UpstreamClient {
 
         let mut response_builder = Response::builder().status(status);
 
-        for (name, value) in upstream_resp.headers() {
+        for (name, value) in response_headers.iter() {
             response_builder = response_builder.header(name, value);
         }
 
         if is_streaming {
+            // For streaming, upstream_resp is always Some (400 errors are not streaming)
+            let upstream_resp = upstream_resp.expect("streaming response should always be present");
             let stream = upstream_resp.bytes_stream();
             let response_preview = if debug_level >= DebugLogLevel::Full {
                 ResponsePreview::new(
@@ -391,13 +535,24 @@ impl UpstreamClient {
             Ok(response_builder.body(Body::from_stream(observed))?)
         } else {
             span.mark_first_byte();
-            let body_bytes = match upstream_resp.bytes().await {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    let err = ProxyError::Internal(format!("Failed to read response body: {}", e));
-                    observability.finish_error(span, Some(err.status_code().as_u16()));
-                    return Err(err);
+            // Use pre-read body if available (from 400 error check), otherwise read from response
+            let body_bytes = if let Some(pre_read) = pre_read_body {
+                Bytes::from(pre_read)
+            } else if let Some(resp) = upstream_resp {
+                match resp.bytes().await {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        let err =
+                            ProxyError::Internal(format!("Failed to read response body: {}", e));
+                        observability.finish_error(span, Some(err.status_code().as_u16()));
+                        return Err(err);
+                    }
                 }
+            } else {
+                // This shouldn't happen - either pre_read_body or upstream_resp should be set
+                let err = ProxyError::Internal("No response body available".to_string());
+                observability.finish_error(span, Some(500));
+                return Err(err);
             };
 
             if debug_level >= DebugLogLevel::Verbose {
@@ -487,4 +642,50 @@ impl Default for UpstreamClient {
             debug_logger,
         )
     }
+}
+
+/// Check if an error response indicates invalid thinking block signature.
+///
+/// Returns true if the response is a 400 error caused by thinking blocks
+/// from a different backend (invalid signature).
+fn is_thinking_signature_error(response_body: &[u8]) -> bool {
+    // Try to parse as JSON and extract error message
+    let error_message = if let Ok(json) = serde_json::from_slice::<serde_json::Value>(response_body)
+    {
+        // Try common error response formats
+        json.get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .or_else(|| json.get("message").and_then(|m| m.as_str()))
+            .map(|s| s.to_lowercase())
+    } else {
+        // Fall back to raw text
+        Some(String::from_utf8_lossy(response_body).to_lowercase())
+    };
+
+    let Some(message) = error_message else {
+        tracing::trace!("No error message found in response body");
+        return false;
+    };
+
+    // Check for thinking-related error patterns
+    // Must contain "thinking" AND one of the signature-related keywords
+    let has_thinking = message.contains("thinking");
+    let has_signature_keyword = message.contains("signature")
+        || message.contains("invalid")
+        || message.contains("verification")
+        || message.contains("mismatch")
+        || message.contains("unrecognized");
+
+    let is_thinking_error = has_thinking && has_signature_keyword;
+
+    tracing::trace!(
+        has_thinking = has_thinking,
+        has_signature_keyword = has_signature_keyword,
+        is_thinking_error = is_thinking_error,
+        message_preview = %if message.len() > 200 { &message[..200] } else { &message },
+        "Checked error message for thinking signature error"
+    );
+
+    is_thinking_error
 }

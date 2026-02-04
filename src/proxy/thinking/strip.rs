@@ -83,9 +83,10 @@ impl ThinkingTransformer for StripTransformer {
     ) -> Result<TransformResult, TransformError> {
         let mut stats = TransformStats::default();
 
+        // Strip mode: always remove thinking blocks eagerly.
+        // This prevents 400 errors from invalid signatures entirely.
         stats.stripped_count = strip_thinking_blocks(body);
 
-        // Remove context_management field if we modified anything
         if stats.stripped_count > 0 {
             remove_context_management(body);
         }
@@ -103,9 +104,12 @@ mod tests {
         TransformContext::new("test-backend", "test-request-123", "/v1/messages")
     }
 
-    #[tokio::test]
-    async fn strips_thinking_blocks() {
-        let transformer = StripTransformer;
+    // ========================================================================
+    // strip_thinking_blocks() function tests
+    // ========================================================================
+
+    #[test]
+    fn strip_fn_removes_thinking_blocks() {
         let mut body = json!({
             "messages": [{
                 "role": "assistant",
@@ -116,23 +120,16 @@ mod tests {
             }]
         });
 
-        let result = transformer
-            .transform_request(&mut body, &make_context())
-            .await
-            .unwrap();
+        let stripped = strip_thinking_blocks(&mut body);
+        assert_eq!(stripped, 1);
 
-        assert!(result.changed);
-        assert_eq!(result.stats.stripped_count, 1);
-
-        // Check that thinking block is removed
         let content = body["messages"][0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0]["type"], "text");
     }
 
-    #[tokio::test]
-    async fn strips_redacted_thinking_blocks() {
-        let transformer = StripTransformer;
+    #[test]
+    fn strip_fn_removes_redacted_thinking_blocks() {
         let mut body = json!({
             "messages": [{
                 "role": "assistant",
@@ -143,42 +140,15 @@ mod tests {
             }]
         });
 
-        let result = transformer
-            .transform_request(&mut body, &make_context())
-            .await
-            .unwrap();
-
-        assert!(result.changed);
-        assert_eq!(result.stats.stripped_count, 1);
+        let stripped = strip_thinking_blocks(&mut body);
+        assert_eq!(stripped, 1);
 
         let content = body["messages"][0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 1);
     }
 
-    #[tokio::test]
-    async fn no_change_when_no_thinking() {
-        let transformer = StripTransformer;
-        let mut body = json!({
-            "messages": [{
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": "Hello!"}
-                ]
-            }]
-        });
-
-        let result = transformer
-            .transform_request(&mut body, &make_context())
-            .await
-            .unwrap();
-
-        assert!(!result.changed);
-        assert_eq!(result.stats.stripped_count, 0);
-    }
-
-    #[tokio::test]
-    async fn handles_multiple_messages() {
-        let transformer = StripTransformer;
+    #[test]
+    fn strip_fn_handles_multiple_messages() {
         let mut body = json!({
             "messages": [
                 {
@@ -202,17 +172,73 @@ mod tests {
             ]
         });
 
+        let stripped = strip_thinking_blocks(&mut body);
+        assert_eq!(stripped, 2);
+    }
+
+    #[test]
+    fn strip_fn_no_change_when_no_thinking() {
+        let mut body = json!({
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Hello!"}
+                ]
+            }]
+        });
+
+        let stripped = strip_thinking_blocks(&mut body);
+        assert_eq!(stripped, 0);
+    }
+
+    #[test]
+    fn remove_context_management_removes_field() {
+        let mut body = json!({
+            "messages": [],
+            "context_management": {
+                "some": "config"
+            }
+        });
+
+        let removed = remove_context_management(&mut body);
+        assert!(removed);
+        assert!(body.get("context_management").is_none());
+    }
+
+    // ========================================================================
+    // StripTransformer tests (strips eagerly)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn transform_request_strips_thinking_blocks() {
+        let transformer = StripTransformer;
+        let mut body = json!({
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Let me think...", "signature": "abc123"},
+                    {"type": "text", "text": "Hello!"}
+                ]
+            }]
+        });
+
         let result = transformer
             .transform_request(&mut body, &make_context())
             .await
             .unwrap();
 
+        // StripTransformer strips thinking blocks eagerly
         assert!(result.changed);
-        assert_eq!(result.stats.stripped_count, 2);
+        assert_eq!(result.stats.stripped_count, 1);
+
+        // Thinking blocks should be removed
+        let content = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "text");
     }
 
     #[tokio::test]
-    async fn removes_context_management_field() {
+    async fn transform_request_removes_context_management() {
         let transformer = StripTransformer;
         let mut body = json!({
             "messages": [{
@@ -236,10 +262,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handles_empty_messages() {
+    async fn transform_request_no_change_when_no_thinking() {
         let transformer = StripTransformer;
         let mut body = json!({
-            "messages": []
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Hello!"}
+                ]
+            }]
         });
 
         let result = transformer
@@ -248,20 +279,6 @@ mod tests {
             .unwrap();
 
         assert!(!result.changed);
-    }
-
-    #[tokio::test]
-    async fn handles_missing_messages() {
-        let transformer = StripTransformer;
-        let mut body = json!({
-            "model": "claude-3"
-        });
-
-        let result = transformer
-            .transform_request(&mut body, &make_context())
-            .await
-            .unwrap();
-
-        assert!(!result.changed);
+        assert_eq!(result.stats.stripped_count, 0);
     }
 }

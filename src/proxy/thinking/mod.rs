@@ -36,7 +36,7 @@ mod traits;
 pub use context::{TransformContext, TransformResult, TransformStats};
 pub use error::{SummarizeError, TransformError};
 pub use sse_parser::extract_assistant_text;
-pub use strip::StripTransformer;
+pub use strip::{remove_context_management, strip_thinking_blocks, StripTransformer};
 pub use summarize::SummarizeTransformer;
 pub use summarizer::SummarizerClient;
 pub use traits::ThinkingTransformer;
