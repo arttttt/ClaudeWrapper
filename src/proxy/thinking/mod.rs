@@ -27,6 +27,7 @@
 
 mod context;
 mod error;
+mod registry;
 mod sse_parser;
 mod strip;
 mod summarize;
@@ -35,6 +36,7 @@ mod traits;
 
 pub use context::{TransformContext, TransformResult, TransformStats};
 pub use error::{SummarizeError, TransformError};
+pub use registry::ThinkingRegistry;
 pub use sse_parser::extract_assistant_text;
 pub use strip::{remove_context_management, strip_thinking_blocks, StripTransformer};
 pub use summarize::SummarizeTransformer;
@@ -43,16 +45,20 @@ pub use traits::ThinkingTransformer;
 
 use crate::config::{ThinkingConfig, ThinkingMode};
 use crate::metrics::DebugLogger;
+use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Registry that creates and manages the active thinking transformer.
 ///
 /// Supports hot-swapping transformers when configuration changes.
+/// Also manages the ThinkingRegistry for tracking thinking blocks across sessions.
 pub struct TransformerRegistry {
     current: RwLock<Arc<dyn ThinkingTransformer>>,
     config: std::sync::RwLock<ThinkingConfig>,
     debug_logger: Option<Arc<DebugLogger>>,
+    /// Registry for tracking thinking blocks by session
+    thinking_registry: Mutex<ThinkingRegistry>,
 }
 
 impl TransformerRegistry {
@@ -63,6 +69,7 @@ impl TransformerRegistry {
             current: RwLock::new(transformer),
             config: std::sync::RwLock::new(config),
             debug_logger,
+            thinking_registry: Mutex::new(ThinkingRegistry::new()),
         }
     }
 
@@ -168,6 +175,58 @@ impl TransformerRegistry {
             let transformer = self.get().await;
             transformer.on_response_complete(text).await;
         }
+    }
+
+    // ========================================================================
+    // Thinking Registry methods
+    // ========================================================================
+
+    /// Notify the thinking registry about a backend switch.
+    ///
+    /// This increments the internal session ID, invalidating thinking blocks
+    /// from previous sessions.
+    pub fn notify_backend_for_thinking(&self, backend_name: &str) {
+        let mut registry = self.thinking_registry.lock();
+        registry.on_backend_switch(backend_name);
+    }
+
+    /// Register thinking blocks from a response body.
+    ///
+    /// Extracts thinking blocks and records them with the current session.
+    pub fn register_thinking_from_response(&self, response_body: &[u8]) {
+        let mut registry = self.thinking_registry.lock();
+        registry.register_from_response(response_body);
+    }
+
+    /// Register thinking blocks from an SSE event.
+    ///
+    /// Call this for each SSE data event to capture thinking blocks as they stream.
+    pub fn register_thinking_from_sse(&self, event_data: &str) {
+        let mut registry = self.thinking_registry.lock();
+        registry.register_from_sse_event(event_data);
+    }
+
+    /// Filter thinking blocks in a request body.
+    ///
+    /// Removes thinking blocks that don't belong to the current session.
+    /// Returns the number of blocks removed.
+    pub fn filter_thinking_blocks(&self, body: &mut serde_json::Value) -> u32 {
+        let registry = self.thinking_registry.lock();
+        registry.filter_request(body)
+    }
+
+    /// Cleanup old sessions from the thinking registry.
+    ///
+    /// Removes blocks from sessions older than `keep_sessions` ago.
+    pub fn cleanup_thinking_registry(&self, keep_sessions: u64) {
+        let mut registry = self.thinking_registry.lock();
+        registry.cleanup_old_sessions(keep_sessions);
+    }
+
+    /// Get the current thinking session ID.
+    pub fn current_thinking_session(&self) -> u64 {
+        let registry = self.thinking_registry.lock();
+        registry.current_session()
     }
 }
 

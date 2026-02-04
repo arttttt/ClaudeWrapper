@@ -8,8 +8,8 @@ use crate::backend::BackendState;
 use crate::config::{build_auth_header, DebugLogLevel};
 use crate::config::ConfigStore;
 use crate::metrics::{
-    redact_body_preview, redact_headers, DebugLogger, ObservedStream, ObservabilityHub,
-    RequestMeta, RequestParser, RequestSpan, ResponseMeta, ResponseParser, ResponsePreview,
+    redact_body, redact_headers, DebugLogger, ObservedStream, ObservabilityHub, RequestMeta,
+    RequestParser, RequestSpan, ResponseMeta, ResponseParser, ResponsePreview,
 };
 use crate::proxy::error::ProxyError;
 use crate::proxy::pool::PoolConfig;
@@ -170,22 +170,46 @@ impl UpstreamClient {
                         body_preview: None,
                     }
                 });
-            meta.body_preview = redact_body_preview(
+            let limit = if debug_config.full_body {
+                None
+            } else {
+                Some(debug_config.body_preview_bytes)
+            };
+            meta.body_preview = redact_body(
                 &body_bytes,
                 request_content_type,
-                debug_config.body_preview_bytes,
+                limit,
+                debug_config.pretty_print,
             );
         }
 
         // Apply transformer for summarization (prepend summary, save messages)
-        // Note: This does NOT strip thinking blocks - that happens lazily on 400 retry
         let mut body_bytes = body_bytes;
+
+        // Notify thinking registry about current backend (increments session on switch)
+        self.transformer_registry
+            .notify_backend_for_thinking(&backend.name);
+
         if request_content_type.contains("application/json") {
             self.transformer_registry
                 .update_mode(self.config.get().thinking.mode.clone())
                 .await;
 
             if let Ok(mut json_body) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                // Filter out thinking blocks from other sessions
+                let filtered = self.transformer_registry.filter_thinking_blocks(&mut json_body);
+                if filtered > 0 {
+                    tracing::info!(
+                        backend = %backend.name,
+                        filtered_blocks = filtered,
+                        "Filtered thinking blocks from other sessions"
+                    );
+                    // Update body_bytes with filtered body
+                    if let Ok(updated) = serde_json::to_vec(&json_body) {
+                        body_bytes = updated;
+                    }
+                }
+
                 let context = TransformContext::new(
                     backend.name.clone(),
                     span.request_id().to_string(),
@@ -375,6 +399,14 @@ impl UpstreamClient {
                         backend = %backend.name,
                         "Detected thinking signature error, stripping thinking blocks and retrying"
                     );
+                    // Log to debug file
+                    self.debug_logger.log_auxiliary(
+                        "THINKING-400",
+                        Some(400),
+                        None,
+                        Some("Detected thinking signature error, will retry with stripped blocks"),
+                        None,
+                    );
 
                     // Try to strip thinking blocks from original body
                     let retry_body = if let Ok(mut json_body) =
@@ -436,6 +468,14 @@ impl UpstreamClient {
                                     backend = %backend.name,
                                     status = %retry_status,
                                     "Retry after thinking strip completed"
+                                );
+                                // Log retry success to debug file
+                                self.debug_logger.log_auxiliary(
+                                    "THINKING-RETRY",
+                                    Some(retry_status.as_u16()),
+                                    None,
+                                    Some(&format!("Retry succeeded after stripping thinking blocks")),
+                                    None,
                                 );
                                 (Some(retry_resp), retry_status, retry_headers, None)
                             }
@@ -505,20 +545,31 @@ impl UpstreamClient {
             let upstream_resp = upstream_resp.expect("streaming response should always be present");
             let stream = upstream_resp.bytes_stream();
             let response_preview = if debug_level >= DebugLogLevel::Full {
-                ResponsePreview::new(
-                    debug_config.body_preview_bytes,
-                    content_type.clone().unwrap_or_default(),
-                )
+                let ct = content_type.clone().unwrap_or_default();
+                if debug_config.full_body {
+                    Some(ResponsePreview::full(ct, debug_config.pretty_print))
+                } else {
+                    ResponsePreview::new(debug_config.body_preview_bytes, ct)
+                }
             } else {
                 None
             };
 
-            // Create callback to capture response for summarization
+            // Create callback to capture response for summarization and thinking registration
             let registry = Arc::clone(&self.transformer_registry);
             let on_complete: crate::metrics::ResponseCompleteCallback = Box::new(move |bytes| {
                 let registry = Arc::clone(&registry);
                 let bytes = bytes.to_vec();
                 tokio::spawn(async move {
+                    // Register thinking blocks from SSE stream
+                    // Parse SSE data events and extract thinking blocks
+                    let text = String::from_utf8_lossy(&bytes);
+                    for line in text.lines() {
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            registry.register_thinking_from_sse(data);
+                        }
+                    }
+                    // Also call the original response complete handler
                     registry.on_response_complete(&bytes).await;
                 });
             });
@@ -555,6 +606,10 @@ impl UpstreamClient {
                 return Err(err);
             };
 
+            // Register thinking blocks from non-streaming response
+            self.transformer_registry
+                .register_thinking_from_response(&body_bytes);
+
             if debug_level >= DebugLogLevel::Verbose {
                 let mut analysis = self.response_parser.parse_response(&body_bytes);
                 if analysis.cost_usd.is_none() {
@@ -580,10 +635,16 @@ impl UpstreamClient {
                         headers: None,
                         body_preview: None,
                     });
-                meta.body_preview = redact_body_preview(
+                let limit = if debug_config.full_body {
+                    None
+                } else {
+                    Some(debug_config.body_preview_bytes)
+                };
+                meta.body_preview = redact_body(
                     &body_bytes,
                     content_type.as_deref().unwrap_or(""),
-                    debug_config.body_preview_bytes,
+                    limit,
+                    debug_config.pretty_print,
                 );
             }
 
@@ -689,3 +750,4 @@ fn is_thinking_signature_error(response_body: &[u8]) -> bool {
 
     is_thinking_error
 }
+
