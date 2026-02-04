@@ -423,10 +423,10 @@ mod tests {
         assert_eq!(registry.block_count(), 5);
         assert_eq!(registry.current_session(), 5);
 
-        // Cleanup keeping only last 2 sessions
-        registry.cleanup_old_sessions(2);
+        // Cleanup keeping only last 2 sessions (current=5, keep sessions >= 5-1=4)
+        registry.cleanup_old_sessions(1);
 
-        // Should keep sessions 4 and 5 (current is 5, keep 5-2=3 and newer)
+        // Should keep sessions 4 and 5
         assert_eq!(registry.block_count(), 2);
     }
 }
