@@ -116,6 +116,25 @@ impl Backend {
             CredentialStatus::Configured(_) | CredentialStatus::NoAuth
         )
     }
+
+    /// Whether to convert adaptive thinking to standard "enabled" format.
+    ///
+    /// Uses explicit `thinking_compat` config if set, otherwise auto-detects:
+    /// returns `true` for non-Anthropic backends (base_url != api.anthropic.com).
+    pub fn needs_thinking_compat(&self) -> bool {
+        self.thinking_compat.unwrap_or_else(|| {
+            !self.base_url.contains("api.anthropic.com")
+        })
+    }
+
+    /// Default budget tokens for thinking compat conversion.
+    const DEFAULT_THINKING_BUDGET: u32 = 10000;
+
+    /// Get the thinking budget tokens for adaptive → enabled conversion.
+    pub fn thinking_budget(&self) -> u32 {
+        self.thinking_budget_tokens
+            .unwrap_or(Self::DEFAULT_THINKING_BUDGET)
+    }
 }
 
 #[cfg(test)]
@@ -172,6 +191,8 @@ mod tests {
             auth_type_str: "passthrough".to_string(),
             api_key: None,
             pricing: None,
+            thinking_compat: None,
+            thinking_budget_tokens: None,
         };
 
         assert!(matches!(

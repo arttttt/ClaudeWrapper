@@ -163,6 +163,8 @@ fn test_backend_is_configured_with_api_key() {
         auth_type_str: "api_key".to_string(),
         api_key: Some("test-key-value".to_string()),
         pricing: None,
+        thinking_compat: None,
+        thinking_budget_tokens: None,
     };
 
     assert!(backend.is_configured());
@@ -178,6 +180,8 @@ fn test_backend_not_configured_without_api_key() {
         auth_type_str: "api_key".to_string(),
         api_key: None,
         pricing: None,
+        thinking_compat: None,
+        thinking_budget_tokens: None,
     };
 
     assert!(!backend.is_configured());
@@ -193,6 +197,8 @@ fn test_backend_passthrough_always_configured() {
         auth_type_str: "passthrough".to_string(),
         api_key: None,
         pricing: None,
+        thinking_compat: None,
+        thinking_budget_tokens: None,
     };
 
     assert!(backend.is_configured());
@@ -212,6 +218,8 @@ fn test_build_auth_header_api_key() {
         auth_type_str: "api_key".to_string(),
         api_key: Some("my-secret-key".to_string()),
         pricing: None,
+        thinking_compat: None,
+        thinking_budget_tokens: None,
     };
 
     let header = build_auth_header(&backend);
@@ -232,6 +240,8 @@ fn test_build_auth_header_bearer() {
         auth_type_str: "bearer".to_string(),
         api_key: Some("my-bearer-token".to_string()),
         pricing: None,
+        thinking_compat: None,
+        thinking_budget_tokens: None,
     };
 
     let header = build_auth_header(&backend);
@@ -267,6 +277,8 @@ fn test_validation_fails_unconfigured_active_backend() {
             auth_type_str: "api_key".to_string(),
             api_key: None,
             pricing: None,
+            thinking_compat: None,
+            thinking_budget_tokens: None,
         }],
     };
 
@@ -308,6 +320,8 @@ fn test_configured_backends_filters_correctly() {
                 auth_type_str: "api_key".to_string(),
                 api_key: Some("test-key".to_string()),
                 pricing: None,
+                thinking_compat: None,
+                thinking_budget_tokens: None,
             },
             Backend {
                 name: "unconfigured".to_string(),
@@ -316,6 +330,8 @@ fn test_configured_backends_filters_correctly() {
                 auth_type_str: "api_key".to_string(),
                 api_key: None,
                 pricing: None,
+                thinking_compat: None,
+                thinking_budget_tokens: None,
             },
             Backend {
                 name: "passthrough".to_string(),
@@ -324,6 +340,8 @@ fn test_configured_backends_filters_correctly() {
                 auth_type_str: "passthrough".to_string(),
                 api_key: None,
                 pricing: None,
+                thinking_compat: None,
+                thinking_budget_tokens: None,
             },
         ],
     };

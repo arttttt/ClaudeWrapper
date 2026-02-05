@@ -49,6 +49,8 @@ fn create_backend(name: &str, base_url: &str) -> Backend {
         auth_type_str: "passthrough".to_string(),
         api_key: None,
         pricing: None,
+        thinking_compat: None,
+        thinking_budget_tokens: None,
     }
 }
 

@@ -262,6 +262,15 @@ pub struct Backend {
     /// Optional pricing per million tokens.
     #[serde(default)]
     pub pricing: Option<BackendPricing>,
+    /// Convert adaptive thinking to standard "enabled" format.
+    /// None = auto-detect (true for non-Anthropic backends).
+    /// true = always convert, false = never convert.
+    #[serde(default)]
+    pub thinking_compat: Option<bool>,
+    /// Budget tokens when converting adaptive → enabled thinking.
+    /// Default: 10000.
+    #[serde(default)]
+    pub thinking_budget_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,6 +288,8 @@ impl Default for Backend {
             auth_type_str: "passthrough".to_string(),
             api_key: None,
             pricing: None,
+            thinking_compat: None,
+            thinking_budget_tokens: None,
         }
     }
 }

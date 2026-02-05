@@ -183,6 +183,7 @@ impl UpstreamClient {
 
         // Apply transformer for summarization (prepend summary, save messages)
         let mut body_bytes = body_bytes;
+        let needs_thinking_compat = backend.needs_thinking_compat();
 
         // Notify thinking registry about current backend (increments session on switch)
         self.transformer_registry
@@ -194,6 +195,21 @@ impl UpstreamClient {
                 .await;
 
             if let Ok(mut json_body) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                // Convert adaptive thinking to standard format for non-Anthropic backends
+                if needs_thinking_compat {
+                    if let Some(changed) =
+                        convert_adaptive_thinking(&mut json_body, backend.thinking_budget())
+                    {
+                        if changed {
+                            tracing::info!(
+                                backend = %backend.name,
+                                budget = backend.thinking_budget(),
+                                "Converted adaptive thinking to enabled for compat"
+                            );
+                        }
+                    }
+                }
+
                 // Filter out thinking blocks from other sessions
                 let filtered = self.transformer_registry.filter_thinking_blocks(&mut json_body);
                 if filtered > 0 {
@@ -281,6 +297,16 @@ impl UpstreamClient {
                             auth_type = ?backend.auth_type(),
                             "Stripping incoming auth header"
                         );
+                        continue;
+                    }
+                }
+                // Rewrite anthropic-beta header for non-Anthropic backends
+                if needs_thinking_compat
+                    && name.as_str().eq_ignore_ascii_case("anthropic-beta")
+                {
+                    if let Ok(val) = value.to_str() {
+                        let patched = patch_anthropic_beta_header(val);
+                        builder = builder.header(name, &patched);
                         continue;
                     }
                 }
@@ -515,6 +541,59 @@ fn compute_cost_usd(
         + output_tokens * pricing.output_per_million)
         / 1_000_000.0;
     Some(cost)
+}
+
+/// Convert `"thinking": {"type": "adaptive"}` to `"thinking": {"type": "enabled", "budget_tokens": N}`.
+///
+/// Budget is derived from `max_tokens` in the request body (max_tokens - 1),
+/// falling back to the backend's configured default.
+///
+/// Returns `Some(true)` if converted, `Some(false)` if thinking exists but not adaptive,
+/// `None` if no thinking field present.
+fn convert_adaptive_thinking(body: &mut serde_json::Value, fallback_budget: u32) -> Option<bool> {
+    let is_adaptive = body
+        .get("thinking")
+        .and_then(|t| t.get("type"))
+        .and_then(|t| t.as_str())
+        == Some("adaptive");
+
+    if !is_adaptive {
+        return body.get("thinking").map(|_| false);
+    }
+
+    let budget = body
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .map(|mt| mt.saturating_sub(1) as u32)
+        .unwrap_or(fallback_budget);
+
+    body.as_object_mut()?.insert(
+        "thinking".to_string(),
+        serde_json::json!({
+            "type": "enabled",
+            "budget_tokens": budget
+        }),
+    );
+    Some(true)
+}
+
+/// Rewrite anthropic-beta header for non-Anthropic backends:
+/// strip `adaptive-thinking-*` and ensure `interleaved-thinking-2025-05-14` is present.
+fn patch_anthropic_beta_header(value: &str) -> String {
+    let mut parts: Vec<&str> = value
+        .split(',')
+        .map(|p| p.trim())
+        .filter(|part| !part.starts_with("adaptive-thinking-"))
+        .collect();
+
+    let has_interleaved = parts
+        .iter()
+        .any(|p| p.starts_with("interleaved-thinking-"));
+    if !has_interleaved {
+        parts.push("interleaved-thinking-2025-05-14");
+    }
+
+    parts.join(",")
 }
 
 impl Default for UpstreamClient {

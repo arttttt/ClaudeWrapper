@@ -290,6 +290,8 @@ mod tests {
                     auth_type_str: "api_key".to_string(),
                     api_key: None,
                     pricing: None,
+                    thinking_compat: None,
+                    thinking_budget_tokens: None,
                 },
                 Backend {
                     name: "backend2".to_string(),
@@ -298,6 +300,8 @@ mod tests {
                     auth_type_str: "bearer".to_string(),
                     api_key: None,
                     pricing: None,
+                    thinking_compat: None,
+                    thinking_budget_tokens: None,
                 },
             ],
         }
@@ -436,6 +440,8 @@ mod tests {
             auth_type_str: "api_key".to_string(),
             api_key: None,
             pricing: None,
+            thinking_compat: None,
+            thinking_budget_tokens: None,
         });
 
         state.update_config(new_config).unwrap();

@@ -33,6 +33,8 @@ fn test_config() -> Config {
                 auth_type_str: "none".to_string(),
                 api_key: None,
                 pricing: None,
+                thinking_compat: None,
+                thinking_budget_tokens: None,
             },
             Backend {
                 name: "beta".to_string(),
@@ -41,6 +43,8 @@ fn test_config() -> Config {
                 auth_type_str: "none".to_string(),
                 api_key: None,
                 pricing: None,
+                thinking_compat: None,
+                thinking_budget_tokens: None,
             },
         ],
     }
