@@ -32,7 +32,9 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     let tick_rate = Duration::from_millis(250);
 
     // Load initial config and apply backend override
-    let mut config = Config::load().unwrap_or_default();
+    let mut config = Config::load().map_err(|e| {
+        io::Error::new(io::ErrorKind::InvalidData, format!("Failed to load config: {}", e))
+    })?;
     if let Some(backend_name) = backend_override {
         config.defaults.active = backend_name;
     }
