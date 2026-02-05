@@ -120,20 +120,98 @@ impl ThinkingRegistry {
         }
     }
 
-    /// Register thinking blocks from SSE stream events.
+    /// Register thinking blocks from a complete SSE stream.
     ///
-    /// Call this for each SSE event that might contain thinking content.
-    pub fn register_from_sse_event(&mut self, event_data: &str) {
-        let Ok(json) = serde_json::from_str::<Value>(event_data) else {
-            return;
-        };
+    /// Parses the full SSE byte stream, accumulates `thinking_delta` events
+    /// per block index, and registers complete thinking blocks.
+    ///
+    /// SSE event sequence for thinking blocks:
+    /// 1. `content_block_start` with `{"type":"thinking","thinking":""}` → start accumulator
+    /// 2. `content_block_delta` with `{"type":"thinking_delta","thinking":"chunk"}` → append
+    /// 3. `content_block_stop` → register complete block
+    ///
+    /// Redacted thinking blocks are complete in `content_block_start` and registered immediately.
+    pub fn register_from_sse_stream(&mut self, sse_bytes: &[u8]) {
+        let text = String::from_utf8_lossy(sse_bytes);
+        let mut accumulators: HashMap<u64, String> = HashMap::new();
 
-        // Check for content_block_start with thinking type
-        if json.get("type").and_then(|t| t.as_str()) == Some("content_block_start") {
-            if let Some(block) = json.get("content_block") {
-                if let Some(thinking) = extract_thinking_content(block) {
-                    self.register_block(&thinking);
+        for line in text.lines() {
+            let Some(data) = line.strip_prefix("data: ") else {
+                continue;
+            };
+
+            let Ok(json) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+
+            let event_type = json.get("type").and_then(|t| t.as_str());
+
+            match event_type {
+                Some("content_block_start") => {
+                    let Some(block) = json.get("content_block") else {
+                        continue;
+                    };
+                    let block_type = block.get("type").and_then(|t| t.as_str());
+                    match block_type {
+                        Some("thinking") => {
+                            if let Some(index) = json.get("index").and_then(|i| i.as_u64()) {
+                                let initial = block
+                                    .get("thinking")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("");
+                                accumulators.insert(index, initial.to_string());
+                            }
+                        }
+                        Some("redacted_thinking") => {
+                            if let Some(data) = block.get("data").and_then(|d| d.as_str()) {
+                                self.register_block(data);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
+                Some("content_block_delta") => {
+                    if let Some(delta) = json.get("delta") {
+                        if delta.get("type").and_then(|t| t.as_str()) == Some("thinking_delta") {
+                            if let Some(index) = json.get("index").and_then(|i| i.as_u64()) {
+                                if let Some(thinking) =
+                                    delta.get("thinking").and_then(|t| t.as_str())
+                                {
+                                    if let Some(acc) = accumulators.get_mut(&index) {
+                                        acc.push_str(thinking);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Some("content_block_stop") => {
+                    if let Some(index) = json.get("index").and_then(|i| i.as_u64()) {
+                        if let Some(accumulated) = accumulators.remove(&index) {
+                            if !accumulated.is_empty() {
+                                tracing::debug!(
+                                    index = index,
+                                    content_len = accumulated.len(),
+                                    "SSE: registering complete thinking block"
+                                );
+                                self.register_block(&accumulated);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Register any remaining accumulators (stream may have been truncated)
+        for (index, accumulated) in accumulators {
+            if !accumulated.is_empty() {
+                tracing::warn!(
+                    index = index,
+                    content_len = accumulated.len(),
+                    "SSE: registering thinking block without content_block_stop"
+                );
+                self.register_block(&accumulated);
             }
         }
     }
@@ -639,14 +717,73 @@ mod tests {
     }
 
     #[test]
-    fn test_register_from_sse_event() {
+    fn test_register_from_sse_stream_full_flow() {
         let mut registry = ThinkingRegistry::new();
         registry.on_backend_switch("anthropic");
 
-        let event = r#"{"type":"content_block_start","content_block":{"type":"thinking","thinking":"SSE thought"}}"#;
-        registry.register_from_sse_event(event);
+        let sse_stream = b"\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Hello \"}}\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"world\"}}\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\n";
 
+        registry.register_from_sse_stream(sse_stream);
         assert_eq!(registry.block_count(), 1);
+
+        // Verify the registered block matches the full accumulated text
+        let hash = fast_hash("Hello world");
+        assert!(registry.blocks.contains_key(&hash));
+    }
+
+    #[test]
+    fn test_register_from_sse_stream_redacted_thinking() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        let sse_stream = b"\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"encrypted-data-abc\"}}\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\n";
+
+        registry.register_from_sse_stream(sse_stream);
+        assert_eq!(registry.block_count(), 1);
+    }
+
+    #[test]
+    fn test_register_from_sse_stream_multiple_blocks() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        let sse_stream = b"\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Thought A\"}}\n\
+data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\
+data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\
+data: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\
+data: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Thought B\"}}\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\n\
+data: {\"type\":\"content_block_stop\",\"index\":1}\n\
+data: {\"type\":\"content_block_stop\",\"index\":2}\n";
+
+        registry.register_from_sse_stream(sse_stream);
+        assert_eq!(registry.block_count(), 2, "should register 2 thinking blocks");
+    }
+
+    #[test]
+    fn test_sse_stream_registered_blocks_match_request() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        let sse_stream = b"\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Let me analyze\"}}\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\n";
+
+        registry.register_from_sse_stream(sse_stream);
+
+        // Now filter a request containing the same thinking text
+        let mut request = make_request_with_thinking(&["Let me analyze"]);
+        let removed = registry.filter_request(&mut request);
+        assert_eq!(removed, 0, "SSE-registered block should match request block");
     }
 
     #[test]
@@ -1170,7 +1307,7 @@ mod tests {
         registry.on_backend_switch("anthropic");
 
         registry.register_from_response(b"not json");
-        registry.register_from_sse_event("not json");
+        registry.register_from_sse_stream(b"data: not json\n");
 
         assert_eq!(registry.block_count(), 0);
     }

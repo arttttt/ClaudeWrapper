@@ -409,14 +409,8 @@ impl UpstreamClient {
                 let registry = Arc::clone(&registry);
                 let bytes = bytes.to_vec();
                 tokio::spawn(async move {
-                    // Register thinking blocks from SSE stream
-                    // Parse SSE data events and extract thinking blocks
-                    let text = String::from_utf8_lossy(&bytes);
-                    for line in text.lines() {
-                        if let Some(data) = line.strip_prefix("data: ") {
-                            registry.register_thinking_from_sse(data);
-                        }
-                    }
+                    // Register thinking blocks from the complete SSE stream
+                    registry.register_thinking_from_sse_stream(&bytes);
                     // Also call the original response complete handler
                     registry.on_response_complete(&bytes).await;
                 });
