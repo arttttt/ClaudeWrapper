@@ -205,8 +205,15 @@ impl UpstreamClient {
                         "Filtered thinking blocks from other sessions"
                     );
                     // Update body_bytes with filtered body
-                    if let Ok(updated) = serde_json::to_vec(&json_body) {
-                        body_bytes = updated;
+                    match serde_json::to_vec(&json_body) {
+                        Ok(updated) => body_bytes = updated,
+                        Err(e) => {
+                            tracing::error!(
+                                error = %e,
+                                filtered_blocks = filtered,
+                                "Failed to serialize filtered request body, using original"
+                            );
+                        }
                     }
                 }
 
