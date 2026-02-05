@@ -28,26 +28,72 @@ backend that generated them. When a user switches backends mid-conversation:
 
 ## Solution: Session-Based Thinking Registry
 
-We track thinking blocks by session. Each backend switch increments a session ID,
-invalidating all previous thinking blocks.
+We track thinking blocks by session with a confirmation lifecycle. Each backend switch
+increments a session ID, invalidating all previous thinking blocks.
 
 ### Core Data Structure
 
 ```rust
+struct BlockInfo {
+    session: u64,           // Session when registered
+    confirmed: bool,        // Seen in a request from CC
+    registered_at: Instant, // When registered (for orphan cleanup)
+}
+
 pub struct ThinkingRegistry {
-    current_session: u64,           // Increments on each backend switch
-    current_backend: String,        // Current backend name
-    blocks: HashMap<u64, u64>,      // content_hash → session_id
+    current_session: u64,
+    current_backend: String,
+    blocks: HashMap<u64, BlockInfo>,  // content_hash → info
+    orphan_threshold: Duration,       // Default: 5 minutes
 }
 ```
+
+### Block Lifecycle
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     BLOCK LIFECYCLE                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Response arrives                                                │
+│        │                                                         │
+│        ▼                                                         │
+│  ┌─────────────────────┐                                        │
+│  │ REGISTERED          │  confirmed = false                     │
+│  │ (unconfirmed)       │  registered_at = now                   │
+│  └─────────────────────┘                                        │
+│        │                                                         │
+│        │ Block appears in next request                          │
+│        ▼                                                         │
+│  ┌─────────────────────┐                                        │
+│  │ CONFIRMED           │  confirmed = true                      │
+│  │ (in use by CC)      │                                        │
+│  └─────────────────────┘                                        │
+│        │                                                         │
+│        │ Block disappears from request (context truncated)      │
+│        ▼                                                         │
+│  ┌─────────────────────┐                                        │
+│  │ DELETED             │  Removed from cache                    │
+│  └─────────────────────┘                                        │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Cleanup Rules
+
+A block is removed if ANY of these conditions are true:
+
+| Condition | Reason |
+|-----------|--------|
+| `session ≠ current_session` | Old session, always invalid |
+| `confirmed AND ∉ request` | No longer used by CC |
+| `!confirmed AND ∉ request AND age > threshold` | Orphaned block |
 
 ### Content Hashing Strategy
 
 We use a fast hash combining:
 - **Prefix**: First 256 bytes of thinking content (UTF-8 safe truncation)
 - **Length**: Total content length
-
-This provides good uniqueness while being efficient for large thinking blocks.
 
 ```rust
 fn fast_hash(content: &str) -> u64 {
@@ -59,100 +105,102 @@ fn fast_hash(content: &str) -> u64 {
 }
 ```
 
-## Request/Response Flow
+## Request Processing Flow
 
-### 1. Outgoing Request (to Backend)
+The `filter_request` method is the main entry point:
 
 ```
+filter_request(body):
 ┌─────────────────────────────────────────────────────────────────┐
-│                     REQUEST PROCESSING                           │
-├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  ┌──────────────┐    ┌───────────────────┐    ┌──────────────┐  │
-│  │ Incoming     │───▶│ ThinkingRegistry  │───▶│ Filtered     │  │
-│  │ Request      │    │ filter_request()  │    │ Request      │  │
-│  └──────────────┘    └───────────────────┘    └──────────────┘  │
-│         │                     │                      │          │
-│         │                     │                      │          │
-│         ▼                     ▼                      ▼          │
-│  ┌──────────────┐    ┌───────────────────┐    ┌──────────────┐  │
-│  │ Messages:    │    │ For each thinking │    │ Messages:    │  │
-│  │ - thinking A │    │ block:            │    │ - text only  │  │
-│  │ - thinking B │    │ 1. Hash content   │    │              │  │
-│  │ - text       │    │ 2. Check session  │    │ (thinking    │  │
-│  │              │    │ 3. Keep or remove │    │  removed)    │  │
-│  └──────────────┘    └───────────────────┘    └──────────────┘  │
+│  1. EXTRACT                                                      │
+│     └─▶ Get all thinking block hashes from request              │
+│                                                                  │
+│  2. CONFIRM                                                      │
+│     └─▶ For each hash in request ∩ cache:                       │
+│           └─▶ Set confirmed = true                              │
+│                                                                  │
+│  3. CLEANUP                                                      │
+│     └─▶ Remove blocks matching cleanup rules:                   │
+│           • Old session blocks                                   │
+│           • Confirmed but not in request                        │
+│           • Unconfirmed orphans (age > threshold)               │
+│                                                                  │
+│  4. FILTER                                                       │
+│     └─▶ Remove thinking blocks from request body                │
+│         where hash ∉ cache                                      │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 2. Backend Switch Detection
+### Example Flow: Normal Conversation
 
 ```
-notify_backend_for_thinking("anthropic")
-         │
-         ▼
-┌─────────────────────────────────┐
-│  if current_backend != new:    │
-│    session_id += 1             │
-│    current_backend = new       │
-└─────────────────────────────────┘
-         │
-         ▼
-All previous thinking blocks now invalid
-(their session_id < current_session)
+Response 1 → register [A] (unconfirmed)
+    ↓
+Request 2 [A]
+    ↓
+filter_request:
+  1. Confirm: A.confirmed = true
+  2. Cleanup: nothing to remove
+  3. Filter: A in cache → keep
+    ↓
+Response 2 → register [B] (unconfirmed)
+    ↓
+Request 3 [A, B]
+    ↓
+filter_request:
+  1. Confirm: B.confirmed = true (A already confirmed)
+  2. Cleanup: nothing to remove
+  3. Filter: both in cache → keep
 ```
 
-### 3. Incoming Response (from Backend)
+### Example Flow: Context Truncation
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    RESPONSE PROCESSING                           │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  SSE Stream Events:                                              │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ event: content_block_start                                │   │
-│  │ data: {"type":"thinking", "thinking":"Let me analyze..."}│   │
-│  └──────────────────────────────────────────────────────────┘   │
-│         │                                                        │
-│         ▼                                                        │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ register_thinking_from_sse(event_data)                    │   │
-│  │   1. Extract thinking content                             │   │
-│  │   2. Compute hash                                         │   │
-│  │   3. Store: blocks[hash] = current_session                │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+Cache: {A: confirmed, B: confirmed, C: confirmed}
+    ↓
+Request with [B, C] only (A was truncated)
+    ↓
+filter_request:
+  1. Confirm: nothing new
+  2. Cleanup: A is confirmed but ∉ request → DELETE
+  3. Filter: B, C in cache → keep
+    ↓
+Cache: {B: confirmed, C: confirmed}
 ```
 
-## Session Lifecycle
+### Example Flow: Backend Switch
 
 ```
-Time ──────────────────────────────────────────────────────────────▶
+Session 1 (anthropic): Cache = {A: confirmed}
+    ↓
+Switch to GLM → Session 2
+    ↓
+Request with [A] (CC still has old block)
+    ↓
+filter_request:
+  1. Confirm: A has session 1 ≠ current 2 → skip
+  2. Cleanup: A.session ≠ current → DELETE
+  3. Filter: A ∉ cache → remove from request
+    ↓
+Request sent without thinking blocks
+    ↓
+Response → register [B] (session 2, unconfirmed)
+```
 
-Session 0          Session 1              Session 2
-(initial)          (anthropic)            (glm)
-    │                  │                      │
-    │   switch to      │    switch to         │
-    │   anthropic      │    glm               │
-    ▼                  ▼                      ▼
-┌───────┐         ┌───────┐              ┌───────┐
-│       │         │ T1,T2 │              │ T3,T4 │
-│ empty │         │ valid │              │ valid │
-│       │         │       │              │       │
-└───────┘         └───────┘              └───────┘
-                       │                      │
-                       │  T1,T2 become        │
-                       │  invalid when        │
-                       │  session changes     │
-                       ▼                      │
-                  ┌───────┐                   │
-                  │ T1,T2 │◀──────────────────┘
-                  │INVALID│   T3,T4 become
-                  └───────┘   invalid if we
-                              switch again
+### Example Flow: Orphaned Block
+
+```
+Response → register [A] (unconfirmed, registered_at = T0)
+    ↓
+... time passes, CC never sends A ...
+    ↓
+Request (empty, or without A)
+    ↓
+filter_request:
+  1. Confirm: nothing
+  2. Cleanup: A is unconfirmed, ∉ request, age > threshold → DELETE
 ```
 
 ## Integration Points
@@ -204,16 +252,19 @@ fn extract_thinking_content(item: &Value) -> Option<String> {
 }
 ```
 
-## Memory Management
+## Cache Statistics
 
-To prevent unbounded growth, call `cleanup_old_sessions(keep_sessions)`:
+Monitor cache state with `cache_stats()`:
 
 ```rust
-// Keep only last 2 sessions worth of blocks
-registry.cleanup_old_sessions(2);
+pub struct CacheStats {
+    pub total: usize,           // Total blocks in cache
+    pub confirmed: usize,       // Blocks seen in requests
+    pub unconfirmed: usize,     // Blocks not yet seen in requests
+    pub current_session: usize, // Blocks from current session
+    pub old_session: usize,     // Blocks from old sessions
+}
 ```
-
-This removes blocks from sessions older than `current_session - keep_sessions`.
 
 ## Why Not Filter by Signature?
 
@@ -230,9 +281,17 @@ The session-based approach is:
 - **Reliable**: Works regardless of signature format
 - **Future-proof**: Doesn't depend on backend-specific behavior
 - **Efficient**: O(1) lookup per thinking block
-- **Simple**: Single session counter invalidates all old blocks
+- **Self-cleaning**: Automatic cleanup based on usage patterns
 
 ## Debug Logging
+
+The registry logs at multiple levels:
+
+| Level | Events |
+|-------|--------|
+| `info` | Backend switch, request processing summary |
+| `debug` | Block registration, confirmation, cleanup decisions |
+| `trace` | Detailed per-block decisions |
 
 Enable detailed logging with:
 
@@ -243,8 +302,15 @@ full_body = true
 pretty_print = true
 ```
 
-This will log:
-- Thinking block registration events
-- Filter decisions (kept/removed)
-- Session transitions
-- SSE event summaries
+Example log output:
+```
+INFO Backend switch: incremented thinking session
+     old_backend="anthropic" new_backend="glm" old_session=1 new_session=2
+
+DEBUG Registered new thinking block
+      hash=12345 session=2 content_preview="Let me analyze..."
+
+INFO Request processing complete
+     confirmed=2 cleanup_old_session=1 cleanup_confirmed_unused=0
+     cleanup_orphaned=0 filtered_from_request=1 cache_size_after=3
+```

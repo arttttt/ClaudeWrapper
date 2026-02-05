@@ -3,10 +3,38 @@
 //! When switching backends, old thinking blocks become invalid (signatures don't match).
 //! This registry tracks thinking blocks by hashing their content and associating them
 //! with an internal session ID that increments on each backend switch.
+//!
+//! # Lifecycle of a thinking block
+//!
+//! 1. **Registration**: Block registered from response (confirmed=false)
+//! 2. **Confirmation**: Block seen in subsequent request (confirmed=true)
+//! 3. **Cleanup**: Block removed when no longer needed
+//!
+//! # Cleanup rules
+//!
+//! A block is removed if:
+//! - `session ≠ current_session` (old session, always remove)
+//! - `session = current AND confirmed AND ∉ request` (no longer used)
+//! - `session = current AND !confirmed AND ∉ request AND age > threshold` (orphaned)
 
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::time::{Duration, Instant};
+
+/// Default threshold for orphan cleanup (unconfirmed blocks older than this are removed).
+const DEFAULT_ORPHAN_THRESHOLD: Duration = Duration::from_secs(300); // 5 minutes
+
+/// Information about a registered thinking block.
+#[derive(Debug, Clone)]
+struct BlockInfo {
+    /// Session ID when this block was registered.
+    session: u64,
+    /// Whether this block has been seen in a request (confirmed as used by CC).
+    confirmed: bool,
+    /// When this block was registered.
+    registered_at: Instant,
+}
 
 /// Registry for tracking thinking blocks across backend switches.
 ///
@@ -15,14 +43,17 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 /// all previous thinking blocks.
 #[derive(Debug)]
 pub struct ThinkingRegistry {
-    /// Current session ID (increments on each backend switch)
+    /// Current session ID (increments on each backend switch).
     current_session: u64,
 
-    /// Current backend name
+    /// Current backend name.
     current_backend: String,
 
-    /// Map of content_hash → session_id
-    blocks: HashMap<u64, u64>,
+    /// Map of content_hash → block info.
+    blocks: HashMap<u64, BlockInfo>,
+
+    /// Threshold for orphan cleanup.
+    orphan_threshold: Duration,
 }
 
 impl Default for ThinkingRegistry {
@@ -38,6 +69,17 @@ impl ThinkingRegistry {
             current_session: 0,
             current_backend: String::new(),
             blocks: HashMap::new(),
+            orphan_threshold: DEFAULT_ORPHAN_THRESHOLD,
+        }
+    }
+
+    /// Create a new registry with a custom orphan threshold.
+    pub fn with_orphan_threshold(threshold: Duration) -> Self {
+        Self {
+            current_session: 0,
+            current_backend: String::new(),
+            blocks: HashMap::new(),
+            orphan_threshold: threshold,
         }
     }
 
@@ -46,12 +88,16 @@ impl ThinkingRegistry {
     /// This invalidates all thinking blocks from previous sessions.
     pub fn on_backend_switch(&mut self, new_backend: &str) {
         if self.current_backend != new_backend {
+            let old_session = self.current_session;
             self.current_session += 1;
             self.current_backend = new_backend.to_string();
-            tracing::debug!(
+            tracing::info!(
+                old_backend = %if old_session == 0 { "<none>" } else { &self.current_backend },
                 new_backend = %new_backend,
+                old_session = old_session,
                 new_session = self.current_session,
-                "Backend switch detected, incremented thinking session"
+                cache_size = self.blocks.len(),
+                "Backend switch: incremented thinking session"
             );
         }
     }
@@ -61,23 +107,14 @@ impl ThinkingRegistry {
     /// Extracts thinking blocks from the response and records their hashes
     /// with the current session ID.
     pub fn register_from_response(&mut self, response_body: &[u8]) {
-        // Try to parse as JSON
         let Ok(json) = serde_json::from_slice::<Value>(response_body) else {
             return;
         };
 
-        // Look for thinking blocks in the response content
         if let Some(content) = json.get("content").and_then(|c| c.as_array()) {
             for item in content {
                 if let Some(thinking) = extract_thinking_content(item) {
-                    let hash = fast_hash(&thinking);
-                    self.blocks.insert(hash, self.current_session);
-                    tracing::trace!(
-                        hash = hash,
-                        session = self.current_session,
-                        content_preview = %truncate(&thinking, 50),
-                        "Registered thinking block"
-                    );
+                    self.register_block(&thinking);
                 }
             }
         }
@@ -87,7 +124,6 @@ impl ThinkingRegistry {
     ///
     /// Call this for each SSE event that might contain thinking content.
     pub fn register_from_sse_event(&mut self, event_data: &str) {
-        // Parse SSE data as JSON
         let Ok(json) = serde_json::from_str::<Value>(event_data) else {
             return;
         };
@@ -96,23 +132,202 @@ impl ThinkingRegistry {
         if json.get("type").and_then(|t| t.as_str()) == Some("content_block_start") {
             if let Some(block) = json.get("content_block") {
                 if let Some(thinking) = extract_thinking_content(block) {
-                    let hash = fast_hash(&thinking);
-                    self.blocks.insert(hash, self.current_session);
-                    tracing::trace!(
-                        hash = hash,
-                        session = self.current_session,
-                        "Registered thinking block from SSE"
-                    );
+                    self.register_block(&thinking);
                 }
             }
         }
     }
 
-    /// Filter thinking blocks in a request body.
+    /// Register a single thinking block.
+    fn register_block(&mut self, content: &str) {
+        let hash = fast_hash(content);
+        let now = Instant::now();
+
+        // Check if already registered
+        if let Some(existing) = self.blocks.get(&hash) {
+            if existing.session == self.current_session {
+                tracing::trace!(
+                    hash = hash,
+                    session = self.current_session,
+                    already_confirmed = existing.confirmed,
+                    "Block already registered in current session, skipping"
+                );
+                return;
+            }
+        }
+
+        self.blocks.insert(
+            hash,
+            BlockInfo {
+                session: self.current_session,
+                confirmed: false,
+                registered_at: now,
+            },
+        );
+
+        tracing::debug!(
+            hash = hash,
+            session = self.current_session,
+            content_preview = %truncate(content, 50),
+            cache_size = self.blocks.len(),
+            "Registered new thinking block"
+        );
+    }
+
+    /// Process a request: confirm blocks, cleanup cache, filter request body.
     ///
-    /// Removes thinking blocks that don't belong to the current session.
-    /// Returns the number of blocks removed.
-    pub fn filter_request(&self, body: &mut Value) -> u32 {
+    /// This is the main entry point for request processing. It performs:
+    /// 1. **Confirm**: Mark blocks present in request as confirmed
+    /// 2. **Cleanup**: Remove old/orphaned blocks from cache
+    /// 3. **Filter**: Remove invalid blocks from request body
+    ///
+    /// Returns the number of blocks removed from the request.
+    pub fn filter_request(&mut self, body: &mut Value) -> u32 {
+        let now = Instant::now();
+
+        // Step 1: Extract all thinking block hashes from request
+        let request_hashes = self.extract_request_hashes(body);
+
+        tracing::debug!(
+            request_blocks = request_hashes.len(),
+            cache_size = self.blocks.len(),
+            current_session = self.current_session,
+            "Processing request"
+        );
+
+        // Step 2: Confirm blocks that are in the request
+        let confirmed_count = self.confirm_blocks(&request_hashes);
+
+        // Step 3: Cleanup cache (remove old session blocks and orphans)
+        let cleanup_stats = self.cleanup_cache(&request_hashes, now);
+
+        // Step 4: Filter request body (remove blocks not in cache)
+        let filtered_count = self.filter_request_body(body);
+
+        // Log summary
+        if confirmed_count > 0 || cleanup_stats.total_removed() > 0 || filtered_count > 0 {
+            tracing::info!(
+                confirmed = confirmed_count,
+                cleanup_old_session = cleanup_stats.old_session,
+                cleanup_confirmed_unused = cleanup_stats.confirmed_unused,
+                cleanup_orphaned = cleanup_stats.orphaned,
+                filtered_from_request = filtered_count,
+                cache_size_after = self.blocks.len(),
+                "Request processing complete"
+            );
+        }
+
+        filtered_count
+    }
+
+    /// Extract all thinking block hashes from a request body.
+    fn extract_request_hashes(&self, body: &Value) -> HashSet<u64> {
+        let mut hashes = HashSet::new();
+
+        let Some(messages) = body.get("messages").and_then(|v| v.as_array()) else {
+            return hashes;
+        };
+
+        for message in messages {
+            let Some(content) = message.get("content").and_then(|v| v.as_array()) else {
+                continue;
+            };
+
+            for item in content {
+                if let Some(thinking) = extract_thinking_content(item) {
+                    hashes.insert(fast_hash(&thinking));
+                }
+            }
+        }
+
+        hashes
+    }
+
+    /// Confirm blocks that are present in the request.
+    /// Returns the number of blocks newly confirmed.
+    fn confirm_blocks(&mut self, request_hashes: &HashSet<u64>) -> u32 {
+        let mut confirmed_count = 0u32;
+
+        for hash in request_hashes {
+            if let Some(info) = self.blocks.get_mut(hash) {
+                if info.session == self.current_session && !info.confirmed {
+                    info.confirmed = true;
+                    confirmed_count += 1;
+                    tracing::debug!(
+                        hash = hash,
+                        session = info.session,
+                        age_ms = info.registered_at.elapsed().as_millis() as u64,
+                        "Confirmed thinking block"
+                    );
+                }
+            }
+        }
+
+        confirmed_count
+    }
+
+    /// Cleanup cache: remove old session blocks and orphaned blocks.
+    fn cleanup_cache(&mut self, request_hashes: &HashSet<u64>, now: Instant) -> CleanupStats {
+        let mut stats = CleanupStats::default();
+        let threshold = self.orphan_threshold;
+
+        self.blocks.retain(|hash, info| {
+            // Rule 1: Old session - always remove
+            if info.session != self.current_session {
+                tracing::debug!(
+                    hash = hash,
+                    block_session = info.session,
+                    current_session = self.current_session,
+                    "Removing block from old session"
+                );
+                stats.old_session += 1;
+                return false;
+            }
+
+            // Rule 2: Confirmed but not in request - remove
+            if info.confirmed && !request_hashes.contains(hash) {
+                tracing::debug!(
+                    hash = hash,
+                    session = info.session,
+                    age_ms = info.registered_at.elapsed().as_millis() as u64,
+                    "Removing confirmed block no longer in request"
+                );
+                stats.confirmed_unused += 1;
+                return false;
+            }
+
+            // Rule 3: Unconfirmed, not in request, and old - remove (orphan)
+            if !info.confirmed && !request_hashes.contains(hash) {
+                let age = now.duration_since(info.registered_at);
+                if age > threshold {
+                    tracing::debug!(
+                        hash = hash,
+                        session = info.session,
+                        age_ms = age.as_millis() as u64,
+                        threshold_ms = threshold.as_millis() as u64,
+                        "Removing orphaned block (unconfirmed and expired)"
+                    );
+                    stats.orphaned += 1;
+                    return false;
+                } else {
+                    tracing::trace!(
+                        hash = hash,
+                        session = info.session,
+                        age_ms = age.as_millis() as u64,
+                        threshold_ms = threshold.as_millis() as u64,
+                        "Keeping unconfirmed block (within grace period)"
+                    );
+                }
+            }
+
+            true
+        });
+
+        stats
+    }
+
+    /// Filter request body: remove thinking blocks not in cache.
+    fn filter_request_body(&self, body: &mut Value) -> u32 {
         let Some(messages) = body.get_mut("messages").and_then(|v| v.as_array_mut()) else {
             return 0;
         };
@@ -127,58 +342,38 @@ impl ThinkingRegistry {
             let before_len = content.len();
 
             content.retain(|item| {
-                // Check if this is a thinking block
+                // Keep non-thinking blocks
                 let item_type = item.get("type").and_then(|t| t.as_str());
                 if !matches!(item_type, Some("thinking") | Some("redacted_thinking")) {
-                    return true; // Keep non-thinking blocks
+                    return true;
                 }
 
-                // Extract thinking content and compute hash
+                // Extract content and compute hash
                 let Some(thinking) = extract_thinking_content(item) else {
-                    return false; // Remove if we can't extract content
+                    tracing::debug!("Removing thinking block: failed to extract content");
+                    return false;
                 };
 
                 let hash = fast_hash(&thinking);
 
-                // Check if this block belongs to the current session
-                match self.blocks.get(&hash) {
-                    Some(&session) if session == self.current_session => {
-                        tracing::trace!(
-                            hash = hash,
-                            session = session,
-                            "Keeping thinking block from current session"
-                        );
-                        true
-                    }
-                    Some(&session) => {
-                        tracing::debug!(
-                            hash = hash,
-                            block_session = session,
-                            current_session = self.current_session,
-                            "Removing thinking block from old session"
-                        );
-                        false
-                    }
-                    None => {
-                        tracing::debug!(
-                            hash = hash,
-                            content_preview = %truncate(&thinking, 50),
-                            "Removing unregistered thinking block"
-                        );
-                        false
-                    }
+                // Check if block is in cache (implies valid session)
+                if self.blocks.contains_key(&hash) {
+                    tracing::trace!(
+                        hash = hash,
+                        "Keeping thinking block in request (found in cache)"
+                    );
+                    true
+                } else {
+                    tracing::debug!(
+                        hash = hash,
+                        content_preview = %truncate(&thinking, 50),
+                        "Removing thinking block from request (not in cache)"
+                    );
+                    false
                 }
             });
 
             removed_count += (before_len - content.len()) as u32;
-        }
-
-        if removed_count > 0 {
-            tracing::info!(
-                removed = removed_count,
-                current_session = self.current_session,
-                "Filtered thinking blocks from request"
-            );
         }
 
         removed_count
@@ -199,28 +394,73 @@ impl ThinkingRegistry {
         self.blocks.len()
     }
 
-    /// Clear old blocks that are no longer needed.
-    ///
-    /// Removes blocks from sessions older than `keep_sessions` ago.
-    pub fn cleanup_old_sessions(&mut self, keep_sessions: u64) {
-        if self.current_session <= keep_sessions {
-            return;
+    /// Get cache statistics for monitoring.
+    pub fn cache_stats(&self) -> CacheStats {
+        let mut confirmed = 0;
+        let mut unconfirmed = 0;
+        let mut current_session = 0;
+        let mut old_session = 0;
+
+        for info in self.blocks.values() {
+            if info.confirmed {
+                confirmed += 1;
+            } else {
+                unconfirmed += 1;
+            }
+            if info.session == self.current_session {
+                current_session += 1;
+            } else {
+                old_session += 1;
+            }
         }
 
-        let min_session = self.current_session - keep_sessions;
-        let before = self.blocks.len();
-        self.blocks.retain(|_, &mut session| session >= min_session);
-        let removed = before - self.blocks.len();
-
-        if removed > 0 {
-            tracing::debug!(
-                removed = removed,
-                remaining = self.blocks.len(),
-                min_session = min_session,
-                "Cleaned up old thinking blocks"
-            );
+        CacheStats {
+            total: self.blocks.len(),
+            confirmed,
+            unconfirmed,
+            current_session,
+            old_session,
         }
     }
+
+    /// Log current cache state (for debugging).
+    pub fn log_cache_state(&self) {
+        let stats = self.cache_stats();
+        tracing::info!(
+            total = stats.total,
+            confirmed = stats.confirmed,
+            unconfirmed = stats.unconfirmed,
+            current_session_blocks = stats.current_session,
+            old_session_blocks = stats.old_session,
+            session_id = self.current_session,
+            backend = %self.current_backend,
+            "Thinking block cache state"
+        );
+    }
+}
+
+/// Statistics from cache cleanup.
+#[derive(Debug, Default)]
+struct CleanupStats {
+    old_session: u32,
+    confirmed_unused: u32,
+    orphaned: u32,
+}
+
+impl CleanupStats {
+    fn total_removed(&self) -> u32 {
+        self.old_session + self.confirmed_unused + self.orphaned
+    }
+}
+
+/// Cache statistics for monitoring.
+#[derive(Debug, Clone)]
+pub struct CacheStats {
+    pub total: usize,
+    pub confirmed: usize,
+    pub unconfirmed: usize,
+    pub current_session: usize,
+    pub old_session: usize,
 }
 
 /// Extract thinking content from a JSON value.
@@ -228,11 +468,14 @@ fn extract_thinking_content(item: &Value) -> Option<String> {
     let item_type = item.get("type").and_then(|t| t.as_str())?;
 
     match item_type {
-        "thinking" => item.get("thinking").and_then(|t| t.as_str()).map(|s| s.to_string()),
-        "redacted_thinking" => {
-            // For redacted thinking, use the data field
-            item.get("data").and_then(|d| d.as_str()).map(|s| s.to_string())
-        }
+        "thinking" => item
+            .get("thinking")
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_string()),
+        "redacted_thinking" => item
+            .get("data")
+            .and_then(|d| d.as_str())
+            .map(|s| s.to_string()),
         _ => None,
     }
 }
@@ -259,7 +502,6 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }
-    // Find the last valid char boundary at or before max_bytes
     let mut end = max_bytes;
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
@@ -277,10 +519,58 @@ fn truncate(s: &str, max_len: usize) -> String {
     }
 }
 
+// ============================================================================
+// Tests
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ========================================================================
+    // Helper functions for tests
+    // ========================================================================
+
+    fn make_request_with_thinking(thoughts: &[&str]) -> Value {
+        let content: Vec<Value> = thoughts
+            .iter()
+            .map(|t| {
+                json!({
+                    "type": "thinking",
+                    "thinking": t,
+                    "signature": "test-sig"
+                })
+            })
+            .chain(std::iter::once(json!({"type": "text", "text": "Hello"})))
+            .collect();
+
+        json!({
+            "messages": [{
+                "role": "assistant",
+                "content": content
+            }]
+        })
+    }
+
+    fn make_response_with_thinking(thoughts: &[&str]) -> Vec<u8> {
+        let content: Vec<Value> = thoughts
+            .iter()
+            .map(|t| {
+                json!({
+                    "type": "thinking",
+                    "thinking": t,
+                    "signature": "test-sig"
+                })
+            })
+            .collect();
+
+        serde_json::to_vec(&json!({ "content": content })).unwrap()
+    }
+
+    // ========================================================================
+    // Basic functionality tests
+    // ========================================================================
 
     #[test]
     fn test_new_registry() {
@@ -311,24 +601,238 @@ mod tests {
     }
 
     #[test]
+    fn test_register_from_response() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        let response = make_response_with_thinking(&["Thought A", "Thought B"]);
+        registry.register_from_response(&response);
+
+        assert_eq!(registry.block_count(), 2);
+
+        let stats = registry.cache_stats();
+        assert_eq!(stats.unconfirmed, 2);
+        assert_eq!(stats.confirmed, 0);
+    }
+
+    #[test]
+    fn test_register_from_sse_event() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        let event = r#"{"type":"content_block_start","content_block":{"type":"thinking","thinking":"SSE thought"}}"#;
+        registry.register_from_sse_event(event);
+
+        assert_eq!(registry.block_count(), 1);
+    }
+
+    #[test]
+    fn test_register_deduplication() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        let response = make_response_with_thinking(&["Same thought"]);
+        registry.register_from_response(&response);
+        registry.register_from_response(&response);
+        registry.register_from_response(&response);
+
+        // Should only have one entry
+        assert_eq!(registry.block_count(), 1);
+    }
+
+    // ========================================================================
+    // Confirmation tests
+    // ========================================================================
+
+    #[test]
+    fn test_confirm_blocks_on_request() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Register block
+        let response = make_response_with_thinking(&["Thought A"]);
+        registry.register_from_response(&response);
+        assert_eq!(registry.cache_stats().unconfirmed, 1);
+
+        // Send request with the block - should confirm it
+        let mut request = make_request_with_thinking(&["Thought A"]);
+        registry.filter_request(&mut request);
+
+        assert_eq!(registry.cache_stats().confirmed, 1);
+        assert_eq!(registry.cache_stats().unconfirmed, 0);
+    }
+
+    #[test]
+    fn test_confirm_only_current_session() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Register block in session 1
+        let response = make_response_with_thinking(&["Thought A"]);
+        registry.register_from_response(&response);
+
+        // Switch to session 2
+        registry.on_backend_switch("glm");
+
+        // Request with block from session 1 - should NOT confirm (different session)
+        let mut request = make_request_with_thinking(&["Thought A"]);
+        let removed = registry.filter_request(&mut request);
+
+        // Block should be removed from request (old session)
+        assert_eq!(removed, 1);
+        // And removed from cache
+        assert_eq!(registry.block_count(), 0);
+    }
+
+    // ========================================================================
+    // Cleanup tests - old session
+    // ========================================================================
+
+    #[test]
+    fn test_cleanup_removes_old_session_blocks() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Register blocks in session 1
+        let response = make_response_with_thinking(&["Old thought"]);
+        registry.register_from_response(&response);
+        assert_eq!(registry.block_count(), 1);
+
+        // Switch to session 2
+        registry.on_backend_switch("glm");
+
+        // Process empty request - should cleanup old session blocks
+        let mut request = json!({"messages": []});
+        registry.filter_request(&mut request);
+
+        assert_eq!(registry.block_count(), 0);
+    }
+
+    #[test]
+    fn test_cleanup_old_session_even_if_in_request() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Register block in session 1
+        let response = make_response_with_thinking(&["Thought A"]);
+        registry.register_from_response(&response);
+
+        // Switch to session 2
+        registry.on_backend_switch("glm");
+
+        // Request still has old block (CC hasn't updated yet)
+        let mut request = make_request_with_thinking(&["Thought A"]);
+        let removed = registry.filter_request(&mut request);
+
+        // Block removed from request
+        assert_eq!(removed, 1);
+        // Block removed from cache
+        assert_eq!(registry.block_count(), 0);
+    }
+
+    // ========================================================================
+    // Cleanup tests - confirmed unused
+    // ========================================================================
+
+    #[test]
+    fn test_cleanup_removes_confirmed_not_in_request() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Register and confirm blocks A and B
+        let response = make_response_with_thinking(&["Thought A", "Thought B"]);
+        registry.register_from_response(&response);
+
+        let mut request = make_request_with_thinking(&["Thought A", "Thought B"]);
+        registry.filter_request(&mut request);
+        assert_eq!(registry.cache_stats().confirmed, 2);
+
+        // Next request only has A (B was truncated from context)
+        let mut request = make_request_with_thinking(&["Thought A"]);
+        registry.filter_request(&mut request);
+
+        // B should be removed (confirmed but not in request)
+        assert_eq!(registry.block_count(), 1);
+        assert_eq!(registry.cache_stats().confirmed, 1);
+    }
+
+    #[test]
+    fn test_cleanup_keeps_confirmed_in_request() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Register and confirm block
+        let response = make_response_with_thinking(&["Thought A"]);
+        registry.register_from_response(&response);
+
+        // Multiple requests with same block
+        for _ in 0..5 {
+            let mut request = make_request_with_thinking(&["Thought A"]);
+            registry.filter_request(&mut request);
+        }
+
+        // Block should still be there
+        assert_eq!(registry.block_count(), 1);
+        assert_eq!(registry.cache_stats().confirmed, 1);
+    }
+
+    // ========================================================================
+    // Cleanup tests - orphaned (unconfirmed + expired)
+    // ========================================================================
+
+    #[test]
+    fn test_cleanup_keeps_unconfirmed_within_threshold() {
+        // Use very short threshold for testing
+        let mut registry = ThinkingRegistry::with_orphan_threshold(Duration::from_secs(3600));
+        registry.on_backend_switch("anthropic");
+
+        // Register block (not confirmed yet)
+        let response = make_response_with_thinking(&["Thought A"]);
+        registry.register_from_response(&response);
+
+        // Request without the block (simulating empty first request)
+        let mut request = json!({"messages": []});
+        registry.filter_request(&mut request);
+
+        // Block should still be there (within threshold)
+        assert_eq!(registry.block_count(), 1);
+        assert_eq!(registry.cache_stats().unconfirmed, 1);
+    }
+
+    #[test]
+    fn test_cleanup_removes_orphaned_after_threshold() {
+        // Use zero threshold - any unconfirmed block not in request is removed
+        let mut registry = ThinkingRegistry::with_orphan_threshold(Duration::ZERO);
+        registry.on_backend_switch("anthropic");
+
+        // Register block
+        let response = make_response_with_thinking(&["Thought A"]);
+        registry.register_from_response(&response);
+
+        // Request without the block - should remove as orphan (threshold=0)
+        let mut request = json!({"messages": []});
+        registry.filter_request(&mut request);
+
+        assert_eq!(registry.block_count(), 0);
+    }
+
+    // ========================================================================
+    // Filter request tests
+    // ========================================================================
+
+    #[test]
     fn test_filter_removes_unregistered_blocks() {
         let mut registry = ThinkingRegistry::new();
         registry.on_backend_switch("anthropic");
 
-        let mut body = json!({
-            "messages": [{
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "Some thought", "signature": "abc"},
-                    {"type": "text", "text": "Hello"}
-                ]
-            }]
-        });
+        // Request with block we never registered
+        let mut request = make_request_with_thinking(&["Unknown thought"]);
+        let removed = registry.filter_request(&mut request);
 
-        let removed = registry.filter_request(&mut body);
         assert_eq!(removed, 1);
 
-        let content = body["messages"][0]["content"].as_array().unwrap();
+        // Text block should remain
+        let content = request["messages"][0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0]["type"], "text");
     }
@@ -338,57 +842,322 @@ mod tests {
         let mut registry = ThinkingRegistry::new();
         registry.on_backend_switch("anthropic");
 
-        // Register a thinking block
-        let hash = fast_hash("Some thought");
-        registry.blocks.insert(hash, registry.current_session());
+        // Register block
+        let response = make_response_with_thinking(&["Known thought"]);
+        registry.register_from_response(&response);
 
-        let mut body = json!({
+        // Request with that block
+        let mut request = make_request_with_thinking(&["Known thought"]);
+        let removed = registry.filter_request(&mut request);
+
+        assert_eq!(removed, 0);
+
+        // Both blocks should remain
+        let content = request["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2); // thinking + text
+    }
+
+    #[test]
+    fn test_filter_handles_redacted_thinking() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Register via response with redacted thinking
+        let response = serde_json::to_vec(&json!({
+            "content": [{
+                "type": "redacted_thinking",
+                "data": "encrypted-data-123"
+            }]
+        }))
+        .unwrap();
+        registry.register_from_response(&response);
+
+        // Request with same redacted thinking
+        let mut request = json!({
             "messages": [{
                 "role": "assistant",
                 "content": [
-                    {"type": "thinking", "thinking": "Some thought", "signature": "abc"},
+                    {"type": "redacted_thinking", "data": "encrypted-data-123"},
                     {"type": "text", "text": "Hello"}
                 ]
             }]
         });
+        let removed = registry.filter_request(&mut request);
 
-        let removed = registry.filter_request(&mut body);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_filter_multiple_messages() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Register only one thought
+        let response = make_response_with_thinking(&["Known"]);
+        registry.register_from_response(&response);
+
+        // Request with multiple messages, some known some unknown
+        let mut request = json!({
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "Known", "signature": "s1"},
+                        {"type": "text", "text": "Response 1"}
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": "Next question"
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "Unknown", "signature": "s2"},
+                        {"type": "text", "text": "Response 2"}
+                    ]
+                }
+            ]
+        });
+
+        let removed = registry.filter_request(&mut request);
+        assert_eq!(removed, 1); // Only "Unknown" removed
+
+        // Verify structure
+        let msg0_content = request["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(msg0_content.len(), 2); // thinking + text
+
+        let msg2_content = request["messages"][2]["content"].as_array().unwrap();
+        assert_eq!(msg2_content.len(), 1); // only text
+    }
+
+    // ========================================================================
+    // Full flow tests (positive scenarios)
+    // ========================================================================
+
+    #[test]
+    fn test_full_flow_normal_conversation() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Turn 1: Response with thinking
+        let response1 = make_response_with_thinking(&["Analyzing the problem..."]);
+        registry.register_from_response(&response1);
+        assert_eq!(registry.block_count(), 1);
+
+        // Turn 2: Request includes previous thinking
+        let mut request2 = make_request_with_thinking(&["Analyzing the problem..."]);
+        let removed = registry.filter_request(&mut request2);
+        assert_eq!(removed, 0);
+        assert_eq!(registry.cache_stats().confirmed, 1);
+
+        // Turn 2: Response with new thinking
+        let response2 = make_response_with_thinking(&["Let me elaborate..."]);
+        registry.register_from_response(&response2);
+        assert_eq!(registry.block_count(), 2);
+
+        // Turn 3: Request includes both thoughts
+        let mut request3 =
+            make_request_with_thinking(&["Analyzing the problem...", "Let me elaborate..."]);
+        let removed = registry.filter_request(&mut request3);
+        assert_eq!(removed, 0);
+        assert_eq!(registry.cache_stats().confirmed, 2);
+    }
+
+    #[test]
+    fn test_full_flow_context_truncation() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Build up several thoughts
+        for i in 1..=5 {
+            let response = make_response_with_thinking(&[&format!("Thought {}", i)]);
+            registry.register_from_response(&response);
+
+            let thoughts: Vec<String> = (1..=i).map(|j| format!("Thought {}", j)).collect();
+            let thought_refs: Vec<&str> = thoughts.iter().map(|s| s.as_str()).collect();
+            let mut request = make_request_with_thinking(&thought_refs);
+            registry.filter_request(&mut request);
+        }
+
+        assert_eq!(registry.block_count(), 5);
+        assert_eq!(registry.cache_stats().confirmed, 5);
+
+        // Context truncation: only keep last 2 thoughts
+        let mut request = make_request_with_thinking(&["Thought 4", "Thought 5"]);
+        registry.filter_request(&mut request);
+
+        // Thoughts 1-3 should be removed
+        assert_eq!(registry.block_count(), 2);
+    }
+
+    #[test]
+    fn test_full_flow_backend_switch() {
+        let mut registry = ThinkingRegistry::new();
+
+        // Session 1: anthropic
+        registry.on_backend_switch("anthropic");
+        let response1 = make_response_with_thinking(&["Anthropic thought"]);
+        registry.register_from_response(&response1);
+
+        let mut request1 = make_request_with_thinking(&["Anthropic thought"]);
+        registry.filter_request(&mut request1);
+        assert_eq!(registry.cache_stats().confirmed, 1);
+
+        // Switch to GLM
+        registry.on_backend_switch("glm");
+
+        // Request still has old thought (CC hasn't updated)
+        let mut request2 = make_request_with_thinking(&["Anthropic thought"]);
+        let removed = registry.filter_request(&mut request2);
+        assert_eq!(removed, 1); // Old thought removed
+        assert_eq!(registry.block_count(), 0);
+
+        // GLM response with new thought
+        let response2 = make_response_with_thinking(&["GLM thought"]);
+        registry.register_from_response(&response2);
+
+        // Request with new thought
+        let mut request3 = make_request_with_thinking(&["GLM thought"]);
+        let removed = registry.filter_request(&mut request3);
+        assert_eq!(removed, 0);
+        assert_eq!(registry.block_count(), 1);
+    }
+
+    #[test]
+    fn test_full_flow_rapid_backend_switches() {
+        let mut registry = ThinkingRegistry::new();
+
+        // Rapid switches without any blocks
+        registry.on_backend_switch("a");
+        registry.on_backend_switch("b");
+        registry.on_backend_switch("c");
+        registry.on_backend_switch("a"); // Back to a
+
+        assert_eq!(registry.current_session(), 4);
+
+        // Register and use a block
+        let response = make_response_with_thinking(&["New thought"]);
+        registry.register_from_response(&response);
+
+        let mut request = make_request_with_thinking(&["New thought"]);
+        let removed = registry.filter_request(&mut request);
+        assert_eq!(removed, 0);
+    }
+
+    // ========================================================================
+    // Negative / edge case tests
+    // ========================================================================
+
+    #[test]
+    fn test_negative_empty_request() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        let response = make_response_with_thinking(&["Thought"]);
+        registry.register_from_response(&response);
+
+        let mut request = json!({"messages": []});
+        let removed = registry.filter_request(&mut request);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_negative_no_messages_field() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        let mut request = json!({"model": "claude-3"});
+        let removed = registry.filter_request(&mut request);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_negative_string_content() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Messages with string content (not array)
+        let mut request = json!({
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there"}
+            ]
+        });
+        let removed = registry.filter_request(&mut request);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_negative_malformed_thinking_block() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Thinking block without content
+        let mut request = json!({
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking"},  // Missing "thinking" field
+                    {"type": "text", "text": "Hello"}
+                ]
+            }]
+        });
+        let removed = registry.filter_request(&mut request);
+        assert_eq!(removed, 1); // Malformed block removed
+    }
+
+    #[test]
+    fn test_negative_unknown_block_type() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        // Unknown block type should be kept
+        let mut request = json!({
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "image", "data": "base64..."},
+                    {"type": "text", "text": "Hello"}
+                ]
+            }]
+        });
+        let removed = registry.filter_request(&mut request);
         assert_eq!(removed, 0);
 
-        let content = body["messages"][0]["content"].as_array().unwrap();
+        let content = request["messages"][0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
     }
 
     #[test]
-    fn test_filter_removes_old_session_blocks() {
+    fn test_negative_register_empty_response() {
         let mut registry = ThinkingRegistry::new();
         registry.on_backend_switch("anthropic");
 
-        // Register a block in session 1
-        let hash = fast_hash("Old thought");
-        registry.blocks.insert(hash, 1);
+        registry.register_from_response(b"");
+        registry.register_from_response(b"{}");
+        registry.register_from_response(b"{\"content\": []}");
 
-        // Switch to new session
-        registry.on_backend_switch("glm");
-        registry.on_backend_switch("anthropic"); // Now session 3
-
-        let mut body = json!({
-            "messages": [{
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "Old thought", "signature": "abc"},
-                    {"type": "text", "text": "Hello"}
-                ]
-            }]
-        });
-
-        let removed = registry.filter_request(&mut body);
-        assert_eq!(removed, 1); // Old session block removed
+        assert_eq!(registry.block_count(), 0);
     }
 
     #[test]
+    fn test_negative_register_invalid_json() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+
+        registry.register_from_response(b"not json");
+        registry.register_from_sse_event("not json");
+
+        assert_eq!(registry.block_count(), 0);
+    }
+
+    // ========================================================================
+    // Hash tests
+    // ========================================================================
+
+    #[test]
     fn test_fast_hash_uniqueness() {
-        // Different content should produce different hashes
         let hash1 = fast_hash("Hello world");
         let hash2 = fast_hash("Hello world!");
         let hash3 = fast_hash("Hello world");
@@ -399,7 +1168,6 @@ mod tests {
 
     #[test]
     fn test_fast_hash_long_content() {
-        // Long content with same prefix but different length
         let short = "a".repeat(100);
         let long = "a".repeat(1000);
 
@@ -410,23 +1178,51 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_old_sessions() {
+    fn test_fast_hash_unicode() {
+        let hash1 = fast_hash("Привет мир");
+        let hash2 = fast_hash("Привет мир!");
+        let hash3 = fast_hash("Привет мир");
+
+        assert_ne!(hash1, hash2);
+        assert_eq!(hash1, hash3);
+    }
+
+    #[test]
+    fn test_safe_truncate_unicode() {
+        let s = "Привет"; // 12 bytes, 6 chars
+        assert_eq!(safe_truncate(s, 100), s);
+        assert_eq!(safe_truncate(s, 12), s);
+        assert_eq!(safe_truncate(s, 11), "Приве"); // Can't cut in middle of char
+        assert_eq!(safe_truncate(s, 2), "П");
+        assert_eq!(safe_truncate(s, 1), "");
+    }
+
+    // ========================================================================
+    // Cache stats tests
+    // ========================================================================
+
+    #[test]
+    fn test_cache_stats() {
         let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
 
-        // Create blocks in multiple sessions
-        for i in 1..=5 {
-            registry.on_backend_switch(&format!("backend{}", i));
-            let hash = fast_hash(&format!("thought {}", i));
-            registry.blocks.insert(hash, registry.current_session());
-        }
+        // Register some blocks
+        let response = make_response_with_thinking(&["A", "B", "C"]);
+        registry.register_from_response(&response);
 
-        assert_eq!(registry.block_count(), 5);
-        assert_eq!(registry.current_session(), 5);
+        let stats = registry.cache_stats();
+        assert_eq!(stats.total, 3);
+        assert_eq!(stats.unconfirmed, 3);
+        assert_eq!(stats.confirmed, 0);
+        assert_eq!(stats.current_session, 3);
+        assert_eq!(stats.old_session, 0);
 
-        // Cleanup keeping only last 2 sessions (current=5, keep sessions >= 5-1=4)
-        registry.cleanup_old_sessions(1);
+        // Confirm some
+        let mut request = make_request_with_thinking(&["A", "B"]);
+        registry.filter_request(&mut request);
 
-        // Should keep sessions 4 and 5
-        assert_eq!(registry.block_count(), 2);
+        let stats = registry.cache_stats();
+        assert_eq!(stats.confirmed, 2);
+        assert_eq!(stats.unconfirmed, 1);
     }
 }

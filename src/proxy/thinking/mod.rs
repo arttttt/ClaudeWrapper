@@ -36,7 +36,7 @@ mod traits;
 
 pub use context::{TransformContext, TransformResult, TransformStats};
 pub use error::{SummarizeError, TransformError};
-pub use registry::ThinkingRegistry;
+pub use registry::{CacheStats, ThinkingRegistry};
 pub use sse_parser::extract_assistant_text;
 pub use strip::{remove_context_management, strip_thinking_blocks, StripTransformer};
 pub use summarize::SummarizeTransformer;
@@ -208,25 +208,33 @@ impl TransformerRegistry {
 
     /// Filter thinking blocks in a request body.
     ///
-    /// Removes thinking blocks that don't belong to the current session.
-    /// Returns the number of blocks removed.
-    pub fn filter_thinking_blocks(&self, body: &mut serde_json::Value) -> u32 {
-        let registry = self.thinking_registry.lock();
-        registry.filter_request(body)
-    }
-
-    /// Cleanup old sessions from the thinking registry.
+    /// This is the main entry point for request processing. It performs:
+    /// 1. Confirm: Mark blocks present in request as confirmed
+    /// 2. Cleanup: Remove old/orphaned blocks from cache
+    /// 3. Filter: Remove invalid blocks from request body
     ///
-    /// Removes blocks from sessions older than `keep_sessions` ago.
-    pub fn cleanup_thinking_registry(&self, keep_sessions: u64) {
+    /// Returns the number of blocks removed from the request.
+    pub fn filter_thinking_blocks(&self, body: &mut serde_json::Value) -> u32 {
         let mut registry = self.thinking_registry.lock();
-        registry.cleanup_old_sessions(keep_sessions);
+        registry.filter_request(body)
     }
 
     /// Get the current thinking session ID.
     pub fn current_thinking_session(&self) -> u64 {
         let registry = self.thinking_registry.lock();
         registry.current_session()
+    }
+
+    /// Get cache statistics for monitoring.
+    pub fn thinking_cache_stats(&self) -> CacheStats {
+        let registry = self.thinking_registry.lock();
+        registry.cache_stats()
+    }
+
+    /// Log current thinking cache state (for debugging).
+    pub fn log_thinking_cache_state(&self) {
+        let registry = self.thinking_registry.lock();
+        registry.log_cache_state();
     }
 }
 
