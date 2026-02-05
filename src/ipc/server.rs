@@ -85,6 +85,7 @@ impl IpcServer {
                         uptime_seconds: started_at.elapsed().as_secs(),
                         total_requests,
                         healthy: !shutdown.is_shutting_down(),
+                        thinking_mode: transformer_registry.current_mode().to_string(),
                     };
                     if respond_to.send(status).is_err() {
                         tracing::trace!("IPC: GetStatus response dropped (receiver gone)");

@@ -68,8 +68,14 @@ impl Header {
             spans.push(Span::styled(" │ ", text_style));
         }
 
+        let thinking = status
+            .map(|value| value.thinking_mode.as_str())
+            .unwrap_or("unknown");
+
         spans.extend([
             Span::styled(format!("Backend: {backend}"), text_style),
+            Span::styled(" │ ", text_style),
+            Span::styled(format!("Thinking: {thinking}"), text_style),
             Span::styled(" │ ", text_style),
             Span::styled(format!("Reqs: {total_requests}"), text_style),
             Span::styled(" │ ", text_style),

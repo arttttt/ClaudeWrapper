@@ -346,6 +346,16 @@ impl Default for ThinkingMode {
     }
 }
 
+impl std::fmt::Display for ThinkingMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ThinkingMode::Strip => write!(f, "strip"),
+            ThinkingMode::Summarize => write!(f, "summarize"),
+            ThinkingMode::Native => write!(f, "native"),
+        }
+    }
+}
+
 impl Default for TerminalConfig {
     fn default() -> Self {
         Self {

@@ -28,6 +28,7 @@ pub struct ProxyStatus {
     pub uptime_seconds: u64,
     pub total_requests: u64,
     pub healthy: bool,
+    pub thinking_mode: String,
 }
 
 #[derive(Debug, Clone)]

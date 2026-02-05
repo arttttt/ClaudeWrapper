@@ -130,6 +130,14 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                         Span::styled("  Tokens:    ", Style::default().fg(HEADER_TEXT)),
                         Span::styled(tokens_str, Style::default().fg(HEADER_TEXT)),
                     ]));
+
+                    // Thinking mode
+                    if let Some(status) = app.proxy_status() {
+                        lines.push(Line::from(vec![
+                            Span::styled("  Thinking:  ", Style::default().fg(HEADER_TEXT)),
+                            Span::styled(&status.thinking_mode, Style::default().fg(HEADER_TEXT)),
+                        ]));
+                    }
                 } else {
                     lines.push(Line::from("  No backend configured"));
                 }
