@@ -27,6 +27,7 @@
 
 mod context;
 mod error;
+mod native;
 mod registry;
 mod sse_parser;
 mod strip;
@@ -36,6 +37,7 @@ mod traits;
 
 pub use context::{TransformContext, TransformResult, TransformStats};
 pub use error::{SummarizeError, TransformError};
+pub use native::NativeTransformer;
 pub use registry::{CacheStats, ThinkingRegistry};
 pub use sse_parser::extract_assistant_text;
 pub use strip::{remove_context_management, strip_thinking_blocks, StripTransformer};
@@ -99,10 +101,8 @@ impl TransformerRegistry {
             }
 
             ThinkingMode::Native => {
-                tracing::warn!(
-                    "ThinkingMode::Native is not yet implemented, using Strip instead"
-                );
-                Arc::new(StripTransformer)
+                tracing::info!("Creating NativeTransformer (passthrough, no summarization)");
+                Arc::new(NativeTransformer::new())
             }
         }
     }
