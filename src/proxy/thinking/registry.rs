@@ -480,10 +480,15 @@ fn extract_thinking_content(item: &Value) -> Option<String> {
     }
 }
 
-/// Fast hash using prefix + length for efficiency.
+/// Fast hash using prefix + suffix + length for reliability.
 ///
-/// Hashes the first ~256 bytes of content plus the total length.
+/// Hashes:
+/// - First ~256 bytes (UTF-8 safe)
+/// - Last ~256 bytes (UTF-8 safe)
+/// - Total length
+///
 /// This provides good uniqueness while being fast for large content.
+/// Two blocks with same prefix but different endings will have different hashes.
 fn fast_hash(content: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
 
@@ -491,13 +496,17 @@ fn fast_hash(content: &str) -> u64 {
     let prefix = safe_truncate(content, 256);
     prefix.hash(&mut hasher);
 
-    // Hash the total length to distinguish blocks with same prefix
+    // Hash suffix (last ~256 bytes, adjusted to char boundary)
+    let suffix = safe_suffix(content, 256);
+    suffix.hash(&mut hasher);
+
+    // Hash the total length
     content.len().hash(&mut hasher);
 
     hasher.finish()
 }
 
-/// Safely truncate a string at a char boundary.
+/// Safely truncate a string from the start at a char boundary.
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
@@ -507,6 +516,20 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &s[..end]
+}
+
+/// Safely get suffix of a string at a char boundary.
+fn safe_suffix(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let start = s.len() - max_bytes;
+    // Find the first valid char boundary at or after start
+    let mut begin = start;
+    while begin < s.len() && !s.is_char_boundary(begin) {
+        begin += 1;
+    }
+    &s[begin..]
 }
 
 /// Truncate a string for logging.
@@ -1195,6 +1218,49 @@ mod tests {
         assert_eq!(safe_truncate(s, 11), "Приве"); // Can't cut in middle of char
         assert_eq!(safe_truncate(s, 2), "П");
         assert_eq!(safe_truncate(s, 1), "");
+    }
+
+    #[test]
+    fn test_safe_suffix_unicode() {
+        let s = "Привет"; // 12 bytes, 6 chars
+        assert_eq!(safe_suffix(s, 100), s);
+        assert_eq!(safe_suffix(s, 12), s);
+        assert_eq!(safe_suffix(s, 11), "ривет"); // Can't cut in middle of char
+        assert_eq!(safe_suffix(s, 2), "т");
+        assert_eq!(safe_suffix(s, 1), "");
+    }
+
+    #[test]
+    fn test_fast_hash_same_prefix_suffix_different_middle() {
+        // Known limitation: if first 256 and last 256 bytes are same,
+        // and length is same, hashes will collide.
+        // This is acceptable for our use case - thinking blocks rarely
+        // have identical starts AND ends with different middles.
+        let prefix = "START_".repeat(50); // ~300 bytes
+        let suffix = "_END".repeat(70); // ~280 bytes
+
+        let content1 = format!("{}MIDDLE_A{}", prefix, suffix);
+        let content2 = format!("{}MIDDLE_B{}", prefix, suffix);
+
+        let hash1 = fast_hash(&content1);
+        let hash2 = fast_hash(&content2);
+
+        // These WILL collide - documenting expected behavior
+        assert_eq!(hash1, hash2, "Known limitation: same prefix+suffix+length = same hash");
+    }
+
+    #[test]
+    fn test_fast_hash_same_prefix_different_suffix() {
+        // Same first 256 bytes, different endings
+        let prefix = "X".repeat(300);
+        let content1 = format!("{}ENDING_AAA", prefix);
+        let content2 = format!("{}ENDING_BBB", prefix);
+
+        let hash1 = fast_hash(&content1);
+        let hash2 = fast_hash(&content2);
+
+        // Suffix hashing should catch the difference
+        assert_ne!(hash1, hash2);
     }
 
     // ========================================================================

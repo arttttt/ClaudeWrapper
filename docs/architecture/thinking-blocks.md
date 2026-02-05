@@ -93,6 +93,7 @@ A block is removed if ANY of these conditions are true:
 
 We use a fast hash combining:
 - **Prefix**: First 256 bytes of thinking content (UTF-8 safe truncation)
+- **Suffix**: Last 256 bytes of thinking content (UTF-8 safe)
 - **Length**: Total content length
 
 ```rust
@@ -100,10 +101,14 @@ fn fast_hash(content: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     let prefix = safe_truncate(content, 256);  // UTF-8 safe
     prefix.hash(&mut hasher);
+    let suffix = safe_suffix(content, 256);    // UTF-8 safe
+    suffix.hash(&mut hasher);
     content.len().hash(&mut hasher);
     hasher.finish()
 }
 ```
+
+**Known limitation**: If two blocks have identical first 256 bytes, identical last 256 bytes, and same length, they will hash to the same value. This is acceptable for thinking blocks which rarely have this pattern.
 
 ## Request Processing Flow
 
