@@ -185,6 +185,11 @@ impl UpstreamClient {
         let mut body_bytes = body_bytes;
         let needs_thinking_compat = backend.needs_thinking_compat();
 
+        // Detect streaming requests: reqwest's .timeout() covers the entire response
+        // body read, which kills SSE streams mid-generation. For streaming requests
+        // we rely on connect_timeout (Client-level) + idle_timeout (ObservedStream).
+        let mut is_streaming_request = false;
+
         // Notify thinking registry about current backend (increments session on switch)
         self.transformer_registry
             .notify_backend_for_thinking(&backend.name);
@@ -195,6 +200,11 @@ impl UpstreamClient {
                 .await;
 
             if let Ok(mut json_body) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                is_streaming_request = json_body
+                    .get("stream")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
                 // Convert adaptive thinking to standard format for non-Anthropic backends
                 let mut thinking_converted = false;
                 if needs_thinking_compat {
@@ -354,8 +364,14 @@ impl UpstreamClient {
                 builder = builder.header(name, value);
             }
 
+            // For streaming requests: skip reqwest timeout entirely.
+            // connect_timeout is set on Client, idle_timeout on ObservedStream.
+            // For non-streaming: apply request timeout to the full response.
+            if !is_streaming_request {
+                builder = builder.timeout(self.timeout_config.request);
+            }
+
             let send_result = builder
-                .timeout(self.timeout_config.request)
                 .body(body_bytes.clone())
                 .send()
                 .await;
@@ -470,27 +486,16 @@ impl UpstreamClient {
             let cb_debug_logger = Arc::clone(&self.debug_logger);
             let on_complete: crate::metrics::ResponseCompleteCallback = Box::new(move |bytes| {
                 // Parse SSE events once, reuse for diagnostics and registration
-                let text = String::from_utf8_lossy(bytes);
                 let events = crate::sse::parse_sse_events(bytes);
-                let thinking_events = events.iter().filter(|e| e.is_thinking_event()).count();
-                // Sample first 5 thinking-related SSE events for diagnostics
-                let thinking_samples: Vec<String> = events.iter()
-                    .filter(|e| e.is_thinking_event())
-                    .take(5)
-                    .map(|e| {
-                        let s = e.data.to_string();
-                        if s.len() > 200 { format!("{}...", &s[..200]) } else { s }
-                    })
-                    .collect();
+                let thinking_stats = crate::sse::analyze_thinking_stream(&events);
                 cb_debug_logger.log_auxiliary(
                     "sse_callback",
                     None, None,
                     Some(&format!(
-                        "SSE callback: {} bytes, {} lines, {} thinking events\nSamples: {:?}",
+                        "SSE callback: {} bytes, {} events, thinking: {}",
                         bytes.len(),
-                        text.lines().count(),
-                        thinking_events,
-                        thinking_samples,
+                        events.len(),
+                        thinking_stats,
                     )),
                     None,
                 );

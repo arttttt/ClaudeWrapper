@@ -29,6 +29,8 @@ mod context;
 mod error;
 mod native;
 mod registry;
+#[cfg(test)]
+mod request_structure_tests;
 mod sse_parser;
 mod strip;
 mod summarize;
