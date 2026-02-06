@@ -119,12 +119,9 @@ impl Backend {
 
     /// Whether to convert adaptive thinking to standard "enabled" format.
     ///
-    /// Uses explicit `thinking_compat` config if set, otherwise auto-detects:
-    /// returns `true` for non-Anthropic backends (base_url != api.anthropic.com).
+    /// Only enabled when explicitly set to `true` in config. Default: false.
     pub fn needs_thinking_compat(&self) -> bool {
-        self.thinking_compat.unwrap_or_else(|| {
-            !self.base_url.contains("api.anthropic.com")
-        })
+        self.thinking_compat.unwrap_or(false)
     }
 
 }
