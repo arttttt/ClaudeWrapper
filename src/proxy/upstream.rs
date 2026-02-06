@@ -222,12 +222,17 @@ impl UpstreamClient {
                 }
 
                 // Filter out thinking blocks from other sessions
+                let cache_before = self.transformer_registry.thinking_cache_stats();
                 let filtered = self.transformer_registry.filter_thinking_blocks(&mut json_body);
-                if filtered > 0 {
-                    tracing::info!(
-                        backend = %backend.name,
-                        filtered_blocks = filtered,
-                        "Filtered thinking blocks from other sessions"
+                if filtered > 0 || cache_before.total > 0 {
+                    self.debug_logger.log_auxiliary(
+                        "thinking_filter",
+                        None, None,
+                        Some(&format!(
+                            "Filter: cache={} blocks, removed={} from request",
+                            cache_before.total, filtered,
+                        )),
+                        None,
                     );
                 }
 
@@ -462,13 +467,52 @@ impl UpstreamClient {
 
             // Create callback to capture response for summarization and thinking registration
             let registry = Arc::clone(&self.transformer_registry);
+            let cb_debug_logger = Arc::clone(&self.debug_logger);
             let on_complete: crate::metrics::ResponseCompleteCallback = Box::new(move |bytes| {
+                // Diagnostic: log SSE buffer stats
+                let text = String::from_utf8_lossy(bytes);
+                let thinking_events = text.lines()
+                    .filter(|l| l.contains("thinking"))
+                    .count();
+                // Sample first 5 lines containing "thinking" (any format) to diagnose SSE structure
+                let thinking_samples: Vec<String> = text.lines()
+                    .filter(|l| l.contains("thinking"))
+                    .take(5)
+                    .map(|l| if l.len() > 200 { format!("{}...", &l[..200]) } else { l.to_string() })
+                    .collect();
+                cb_debug_logger.log_auxiliary(
+                    "sse_callback",
+                    None, None,
+                    Some(&format!(
+                        "SSE callback: {} bytes, {} lines, {} thinking-related lines\nSamples: {:?}",
+                        bytes.len(),
+                        text.lines().count(),
+                        thinking_events,
+                        thinking_samples,
+                    )),
+                    None,
+                );
+
+                // Register thinking blocks synchronously to avoid race condition:
+                // next request's filter must see these blocks in the registry.
+                let before = registry.thinking_cache_stats();
+                registry.register_thinking_from_sse_stream(bytes);
+                let after = registry.thinking_cache_stats();
+                let registered = after.total.saturating_sub(before.total);
+                cb_debug_logger.log_auxiliary(
+                    "sse_callback",
+                    None, None,
+                    Some(&format!(
+                        "Registered {} new thinking blocks (cache: {} → {})",
+                        registered, before.total, after.total,
+                    )),
+                    None,
+                );
+
+                // Async response handler (summarization etc.) can run in background
                 let registry = Arc::clone(&registry);
                 let bytes = bytes.to_vec();
                 tokio::spawn(async move {
-                    // Register thinking blocks from the complete SSE stream
-                    registry.register_thinking_from_sse_stream(&bytes);
-                    // Also call the original response complete handler
                     registry.on_response_complete(&bytes).await;
                 });
             });

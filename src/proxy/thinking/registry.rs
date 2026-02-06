@@ -132,29 +132,19 @@ impl ThinkingRegistry {
     ///
     /// Redacted thinking blocks are complete in `content_block_start` and registered immediately.
     pub fn register_from_sse_stream(&mut self, sse_bytes: &[u8]) {
-        let text = String::from_utf8_lossy(sse_bytes);
+        let events = crate::sse::parse_sse_events(sse_bytes);
         let mut accumulators: HashMap<u64, String> = HashMap::new();
 
-        for line in text.lines() {
-            let Some(data) = line.strip_prefix("data: ") else {
-                continue;
-            };
-
-            let Ok(json) = serde_json::from_str::<Value>(data) else {
-                continue;
-            };
-
-            let event_type = json.get("type").and_then(|t| t.as_str());
-
-            match event_type {
-                Some("content_block_start") => {
-                    let Some(block) = json.get("content_block") else {
+        for event in &events {
+            match event.event_type.as_str() {
+                "content_block_start" => {
+                    let Some(block) = event.data.get("content_block") else {
                         continue;
                     };
                     let block_type = block.get("type").and_then(|t| t.as_str());
                     match block_type {
                         Some("thinking") => {
-                            if let Some(index) = json.get("index").and_then(|i| i.as_u64()) {
+                            if let Some(index) = event.data.get("index").and_then(|i| i.as_u64()) {
                                 let initial = block
                                     .get("thinking")
                                     .and_then(|t| t.as_str())
@@ -170,10 +160,10 @@ impl ThinkingRegistry {
                         _ => {}
                     }
                 }
-                Some("content_block_delta") => {
-                    if let Some(delta) = json.get("delta") {
+                "content_block_delta" => {
+                    if let Some(delta) = event.data.get("delta") {
                         if delta.get("type").and_then(|t| t.as_str()) == Some("thinking_delta") {
-                            if let Some(index) = json.get("index").and_then(|i| i.as_u64()) {
+                            if let Some(index) = event.data.get("index").and_then(|i| i.as_u64()) {
                                 if let Some(thinking) =
                                     delta.get("thinking").and_then(|t| t.as_str())
                                 {
@@ -185,8 +175,8 @@ impl ThinkingRegistry {
                         }
                     }
                 }
-                Some("content_block_stop") => {
-                    if let Some(index) = json.get("index").and_then(|i| i.as_u64()) {
+                "content_block_stop" => {
+                    if let Some(index) = event.data.get("index").and_then(|i| i.as_u64()) {
                         if let Some(accumulated) = accumulators.remove(&index) {
                             if !accumulated.is_empty() {
                                 tracing::debug!(
@@ -276,8 +266,23 @@ impl ThinkingRegistry {
         // Step 2: Confirm blocks that are in the request
         let confirmed_count = self.confirm_blocks(&request_hashes);
 
-        // Step 3: Cleanup cache (remove old session blocks and orphans)
-        let cleanup_stats = self.cleanup_cache(&request_hashes, now);
+        // Step 3: Cleanup cache (remove old session blocks and orphans).
+        // Only run cache eviction (rules 2-3) when the request carries
+        // conversation history (has assistant messages). Requests without
+        // assistant messages (count_tokens, first user turn, etc.) have
+        // no history to compare against and would incorrectly evict blocks.
+        let has_history = body
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .map_or(false, |msgs| {
+                msgs.iter().any(|m| m.get("role").and_then(|r| r.as_str()) == Some("assistant"))
+            });
+        let cleanup_stats = if has_history {
+            self.cleanup_cache(&request_hashes, now)
+        } else {
+            // Still remove old-session blocks (Rule 1 only)
+            self.cleanup_old_sessions()
+        };
 
         // Step 4: Filter request body (remove blocks not in cache)
         let filtered_count = self.filter_request_body(body);
@@ -342,6 +347,26 @@ impl ThinkingRegistry {
         }
 
         confirmed_count
+    }
+
+    /// Remove only old-session blocks (Rule 1). Used when the request has no
+    /// conversation history and full cleanup would incorrectly evict blocks.
+    fn cleanup_old_sessions(&mut self) -> CleanupStats {
+        let mut stats = CleanupStats::default();
+        self.blocks.retain(|hash, info| {
+            if info.session != self.current_session {
+                tracing::debug!(
+                    hash = hash,
+                    block_session = info.session,
+                    current_session = self.current_session,
+                    "Removing block from old session"
+                );
+                stats.old_session += 1;
+                return false;
+            }
+            true
+        });
+        stats
     }
 
     /// Cleanup cache: remove old session blocks and orphaned blocks.
@@ -969,8 +994,11 @@ data: {\"type\":\"content_block_stop\",\"index\":0}\n";
         let response = make_response_with_thinking(&["Thought A"]);
         registry.register_from_response(&response);
 
-        // Request without the block - should remove as orphan (threshold=0)
-        let mut request = json!({"messages": []});
+        // Request with history but without the block - should remove as orphan (threshold=0)
+        let mut request = json!({"messages": [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"}
+        ]});
         registry.filter_request(&mut request);
 
         assert_eq!(registry.block_count(), 0);

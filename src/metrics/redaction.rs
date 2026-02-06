@@ -69,44 +69,34 @@ pub fn redact_body(
 
 /// Parse SSE stream and return a structured summary instead of raw events.
 fn summarize_sse_stream(bytes: &[u8], pretty: bool) -> String {
-    let text = String::from_utf8_lossy(bytes);
+    let events = crate::sse::parse_sse_events(bytes);
 
     let mut event_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     let mut last_message_delta: Option<Value> = None;
     let mut final_text = String::new();
-    let mut total_events = 0u32;
+    let total_events = events.len() as u32;
     let mut error_event: Option<Value> = None;
 
-    // Parse SSE events
-    for line in text.lines() {
-        if let Some(data) = line.strip_prefix("data: ") {
-            if let Ok(json) = serde_json::from_str::<Value>(data) {
-                total_events += 1;
+    for event in &events {
+        *event_counts.entry(event.event_type.clone()).or_insert(0) += 1;
 
-                if let Some(event_type) = json.get("type").and_then(|t| t.as_str()) {
-                    *event_counts.entry(event_type.to_string()).or_insert(0) += 1;
-
-                    match event_type {
-                        "content_block_delta" => {
-                            // Extract text delta
-                            if let Some(text) = json
-                                .get("delta")
-                                .and_then(|d| d.get("text"))
-                                .and_then(|t| t.as_str())
-                            {
-                                final_text.push_str(text);
-                            }
-                        }
-                        "message_delta" => {
-                            last_message_delta = Some(json.clone());
-                        }
-                        "error" => {
-                            error_event = Some(json.clone());
-                        }
-                        _ => {}
-                    }
+        match event.event_type.as_str() {
+            "content_block_delta" => {
+                if let Some(text) = event.data
+                    .get("delta")
+                    .and_then(|d| d.get("text"))
+                    .and_then(|t| t.as_str())
+                {
+                    final_text.push_str(text);
                 }
             }
+            "message_delta" => {
+                last_message_delta = Some(event.data.clone());
+            }
+            "error" => {
+                error_event = Some(event.data.clone());
+            }
+            _ => {}
         }
     }
 
