@@ -146,4 +146,90 @@ mod tests {
         let new_state = SummarizeReducer::reduce(state, SummarizeIntent::Success);
         assert_eq!(new_state, SummarizeDialogState::Hidden);
     }
+
+    #[test]
+    fn toggle_button_in_failed_state() {
+        let state = SummarizeDialogState::Failed {
+            error: "err".into(),
+            selected_button: 0,
+        };
+        let new_state = SummarizeReducer::reduce(state, SummarizeIntent::ToggleButton);
+        match new_state {
+            SummarizeDialogState::Failed { selected_button, .. } => {
+                assert_eq!(selected_button, 1);
+            }
+            _ => panic!("Expected Failed state"),
+        }
+    }
+
+    #[test]
+    fn toggle_button_noop_in_other_states() {
+        let state = SummarizeDialogState::Summarizing { animation_tick: 3 };
+        let new_state = SummarizeReducer::reduce(state, SummarizeIntent::ToggleButton);
+        assert!(matches!(
+            new_state,
+            SummarizeDialogState::Summarizing { animation_tick: 3 }
+        ));
+    }
+
+    #[test]
+    fn failed_state_defaults_button_to_zero() {
+        let state = SummarizeDialogState::Retrying {
+            attempt: 2,
+            error: "err".into(),
+            animation_tick: 0,
+        };
+        let new_state = SummarizeReducer::reduce(
+            state,
+            SummarizeIntent::Error {
+                message: "final".into(),
+            },
+        );
+        match new_state {
+            SummarizeDialogState::Failed { selected_button, .. } => {
+                assert_eq!(selected_button, 0);
+            }
+            _ => panic!("Expected Failed state"),
+        }
+    }
+
+    #[test]
+    fn start_error_x3_reaches_failed() {
+        // Full sequence: Start → Error → Error → Error → Failed
+        let state = SummarizeReducer::reduce(
+            SummarizeDialogState::Hidden,
+            SummarizeIntent::Start,
+        );
+        assert!(matches!(state, SummarizeDialogState::Summarizing { .. }));
+
+        let state = SummarizeReducer::reduce(
+            state,
+            SummarizeIntent::Error { message: "e1".into() },
+        );
+        assert!(matches!(
+            state,
+            SummarizeDialogState::Retrying { attempt: 1, .. }
+        ));
+
+        let state = SummarizeReducer::reduce(
+            state,
+            SummarizeIntent::Error { message: "e2".into() },
+        );
+        assert!(matches!(
+            state,
+            SummarizeDialogState::Retrying { attempt: 2, .. }
+        ));
+
+        let state = SummarizeReducer::reduce(
+            state,
+            SummarizeIntent::Error { message: "e3".into() },
+        );
+        match state {
+            SummarizeDialogState::Failed { error, selected_button } => {
+                assert_eq!(error, "e3");
+                assert_eq!(selected_button, 0);
+            }
+            _ => panic!("Expected Failed state after 3 errors"),
+        }
+    }
 }

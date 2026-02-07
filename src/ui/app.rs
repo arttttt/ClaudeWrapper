@@ -43,6 +43,13 @@ pub enum UiCommand {
 
 pub type UiCommandSender = mpsc::Sender<UiCommand>;
 
+/// Generic MVI dispatch: takes current state, runs reducer, stores result.
+macro_rules! dispatch_mvi {
+    ($self:expr, $field:ident, $reducer:ty, $intent:expr) => {
+        $self.$field = <$reducer>::reduce(std::mem::take(&mut $self.$field), $intent);
+    };
+}
+
 pub struct App {
     should_quit: bool,
     tick_rate: Duration,
@@ -429,10 +436,7 @@ impl App {
 
     /// Dispatch an intent to the PTY lifecycle reducer.
     fn dispatch_pty(&mut self, intent: PtyIntent) {
-        self.pty_lifecycle = PtyReducer::reduce(
-            std::mem::take(&mut self.pty_lifecycle),
-            intent,
-        );
+        dispatch_mvi!(self, pty_lifecycle, PtyReducer, intent);
     }
 
     // ========================================================================
@@ -451,10 +455,7 @@ impl App {
 
     /// Dispatch an intent to the summarization dialog reducer.
     pub fn dispatch_summarize(&mut self, intent: SummarizeIntent) {
-        self.summarize_dialog = SummarizeReducer::reduce(
-            std::mem::take(&mut self.summarize_dialog),
-            intent,
-        );
+        dispatch_mvi!(self, summarize_dialog, SummarizeReducer, intent);
     }
 
     /// Start summarization for a backend switch.
@@ -576,10 +577,7 @@ impl App {
 
     /// Dispatch an intent to the history dialog reducer.
     pub fn dispatch_history(&mut self, intent: HistoryIntent) {
-        self.history_dialog = HistoryReducer::reduce(
-            std::mem::take(&mut self.history_dialog),
-            intent,
-        );
+        dispatch_mvi!(self, history_dialog, HistoryReducer, intent);
     }
 
     /// Open the history dialog by loading entries from the provider.

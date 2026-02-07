@@ -118,4 +118,70 @@ mod tests {
         }
         .needs_user_input());
     }
+
+    #[test]
+    fn should_auto_retry_only_when_retrying() {
+        assert!(!SummarizeDialogState::Hidden.should_auto_retry());
+        assert!(!SummarizeDialogState::Summarizing { animation_tick: 0 }.should_auto_retry());
+        assert!(SummarizeDialogState::Retrying {
+            attempt: 1,
+            error: "err".into(),
+            animation_tick: 0,
+        }
+        .should_auto_retry());
+        assert!(!SummarizeDialogState::Failed {
+            error: "err".into(),
+            selected_button: 0,
+        }
+        .should_auto_retry());
+    }
+
+    #[test]
+    fn error_message_returns_correct_values() {
+        assert_eq!(SummarizeDialogState::Hidden.error_message(), None);
+        assert_eq!(
+            SummarizeDialogState::Retrying {
+                attempt: 1,
+                error: "retry err".into(),
+                animation_tick: 0,
+            }
+            .error_message(),
+            Some("retry err")
+        );
+        assert_eq!(
+            SummarizeDialogState::Failed {
+                error: "fail err".into(),
+                selected_button: 0,
+            }
+            .error_message(),
+            Some("fail err")
+        );
+    }
+
+    #[test]
+    fn retry_attempt_returns_correct_values() {
+        assert_eq!(SummarizeDialogState::Hidden.retry_attempt(), None);
+        assert_eq!(
+            SummarizeDialogState::Retrying {
+                attempt: 2,
+                error: "err".into(),
+                animation_tick: 0,
+            }
+            .retry_attempt(),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn selected_button_returns_correct_values() {
+        assert_eq!(SummarizeDialogState::Hidden.selected_button(), 0);
+        assert_eq!(
+            SummarizeDialogState::Failed {
+                error: "err".into(),
+                selected_button: 1,
+            }
+            .selected_button(),
+            1
+        );
+    }
 }
