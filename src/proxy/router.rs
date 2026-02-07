@@ -44,7 +44,6 @@ impl RouterEngine {
             upstream: Arc::new(UpstreamClient::new(
                 timeout_config,
                 pool_config,
-                config.clone(),
                 transformer_registry,
                 debug_logger.clone(),
             )),

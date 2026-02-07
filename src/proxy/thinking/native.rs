@@ -44,21 +44,6 @@ impl ThinkingTransformer for NativeTransformer {
         Ok(TransformResult::unchanged())
     }
 
-    async fn on_backend_switch(
-        &self,
-        from_backend: &str,
-        to_backend: &str,
-        _body: &mut Value,
-    ) -> Result<(), TransformError> {
-        // No summarization - just log the switch
-        tracing::info!(
-            from = %from_backend,
-            to = %to_backend,
-            "Backend switch in native mode (no summarization)"
-        );
-        Ok(())
-    }
-
     async fn on_response_complete(&self, _assistant_text: String) {
         // No-op - we don't track messages in native mode
     }
@@ -88,18 +73,6 @@ mod tests {
 
         assert!(!result.changed);
         assert_eq!(body, original); // Body unchanged
-    }
-
-    #[tokio::test]
-    async fn native_backend_switch_succeeds() {
-        let transformer = NativeTransformer::new();
-        let mut body = json!({});
-
-        let result = transformer
-            .on_backend_switch("anthropic", "glm", &mut body)
-            .await;
-
-        assert!(result.is_ok());
     }
 
     #[test]

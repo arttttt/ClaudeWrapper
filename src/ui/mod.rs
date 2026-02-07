@@ -9,7 +9,6 @@ pub mod mvi;
 pub mod pty;
 pub mod render;
 pub mod runtime;
-pub mod summarization;
 pub mod terminal;
 pub mod terminal_guard;
 pub mod theme;

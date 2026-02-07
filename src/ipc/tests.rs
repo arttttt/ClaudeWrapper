@@ -1,7 +1,7 @@
 use super::*;
 use crate::backend::BackendState;
 use crate::config::{
-    Backend, Config, DebugLoggingConfig, Defaults, ProxyConfig, TerminalConfig, ThinkingConfig,
+    Backend, Config, DebugLoggingConfig, Defaults, ProxyConfig, TerminalConfig,
 };
 use crate::metrics::{DebugLogger, ObservabilityHub};
 use crate::proxy::shutdown::ShutdownManager;
@@ -22,7 +22,6 @@ fn test_config() -> Config {
             retry_backoff_base_ms: 100,
         },
         proxy: ProxyConfig::default(),
-        thinking: ThinkingConfig::default(),
         terminal: TerminalConfig::default(),
         debug_logging: DebugLoggingConfig::default(),
         backends: vec![
@@ -57,7 +56,7 @@ async fn ipc_switch_backend_and_status() {
     let debug_logger = Arc::new(DebugLogger::new(DebugLoggingConfig::default()));
     let observability = ObservabilityHub::new(10).with_plugins(vec![debug_logger.clone()]);
     let shutdown = Arc::new(ShutdownManager::new());
-    let transformer_registry = Arc::new(TransformerRegistry::new(config.thinking.clone(), Some(debug_logger.clone())));
+    let transformer_registry = Arc::new(TransformerRegistry::new(Some(debug_logger.clone())));
     let (client, server) = IpcLayer::new();
 
     let server_task = tokio::spawn(server.run(

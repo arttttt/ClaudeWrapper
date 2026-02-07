@@ -6,7 +6,6 @@ use crate::pty::PtyHandle;
 use crate::ui::history::{HistoryDialogState, HistoryEntry, HistoryIntent, HistoryReducer};
 use crate::ui::mvi::Reducer;
 use crate::ui::pty::{PtyIntent, PtyLifecycleState, PtyReducer};
-use crate::ui::summarization::{SummarizeDialogState, SummarizeIntent, SummarizeReducer};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
@@ -30,11 +29,6 @@ pub enum Focus {
 #[derive(Debug)]
 pub enum UiCommand {
     SwitchBackend { backend_id: String },
-    /// Summarize session and then switch backend.
-    SummarizeAndSwitchBackend {
-        from_backend: String,
-        to_backend: String,
-    },
     RefreshStatus,
     RefreshMetrics { backend_id: Option<String> },
     RefreshBackends,
@@ -72,18 +66,10 @@ pub struct App {
     last_status_refresh: Instant,
     last_metrics_refresh: Instant,
     last_backends_refresh: Instant,
-    /// State of the summarization dialog (MVI pattern).
-    summarize_dialog: SummarizeDialogState,
     /// State of the history dialog (MVI pattern).
     history_dialog: HistoryDialogState,
     /// Provider closure that fetches history entries from backend state.
     history_provider: Option<Arc<dyn Fn() -> Vec<HistoryEntry> + Send + Sync>>,
-    /// Backend ID pending switch (waiting for summarization).
-    pending_backend_switch: Option<String>,
-    /// Last animation tick for spinner.
-    last_animation_tick: Instant,
-    /// Scheduled time for next auto-retry (exponential backoff).
-    scheduled_retry_at: Option<Instant>,
 }
 
 impl App {
@@ -109,12 +95,8 @@ impl App {
             last_status_refresh: now,
             last_metrics_refresh: now,
             last_backends_refresh: now,
-            summarize_dialog: SummarizeDialogState::default(),
             history_dialog: HistoryDialogState::default(),
             history_provider: None,
-            pending_backend_switch: None,
-            last_animation_tick: now,
-            scheduled_retry_at: None,
         }
     }
 
@@ -349,24 +331,6 @@ impl App {
         })
     }
 
-    /// Request summarization and backend switch.
-    ///
-    /// Returns the target backend_id if command was sent successfully.
-    pub fn request_summarize_and_switch(&mut self, to_backend_id: String) -> Option<String> {
-        let from_backend = self.proxy_status.as_ref()
-            .map(|s| s.active_backend.clone())
-            .unwrap_or_default();
-
-        if self.send_command(UiCommand::SummarizeAndSwitchBackend {
-            from_backend,
-            to_backend: to_backend_id.clone(),
-        }) {
-            Some(to_backend_id)
-        } else {
-            None
-        }
-    }
-
     pub fn move_backend_selection(&mut self, direction: i32) {
         if self.backends.is_empty() {
             self.backend_selection = 0;
@@ -437,125 +401,6 @@ impl App {
     /// Dispatch an intent to the PTY lifecycle reducer.
     fn dispatch_pty(&mut self, intent: PtyIntent) {
         dispatch_mvi!(self, pty_lifecycle, PtyReducer, intent);
-    }
-
-    // ========================================================================
-    // Summarization dialog methods (MVI pattern)
-    // ========================================================================
-
-    /// Get the current summarization dialog state.
-    pub fn summarize_dialog(&self) -> &SummarizeDialogState {
-        &self.summarize_dialog
-    }
-
-    /// Check if summarization dialog is visible.
-    pub fn is_summarize_dialog_visible(&self) -> bool {
-        !matches!(self.summarize_dialog, SummarizeDialogState::Hidden)
-    }
-
-    /// Dispatch an intent to the summarization dialog reducer.
-    pub fn dispatch_summarize(&mut self, intent: SummarizeIntent) {
-        dispatch_mvi!(self, summarize_dialog, SummarizeReducer, intent);
-    }
-
-    /// Start summarization for a backend switch.
-    pub fn start_summarization_for_switch(&mut self, backend_id: String) {
-        self.pending_backend_switch = Some(backend_id);
-        self.dispatch_summarize(SummarizeIntent::Start);
-        self.last_animation_tick = Instant::now();
-    }
-
-    /// Get the backend ID waiting for summarization.
-    pub fn pending_backend_switch(&self) -> Option<&str> {
-        self.pending_backend_switch.as_deref()
-    }
-
-    /// Complete the pending backend switch after successful summarization.
-    ///
-    /// Bundles MVI dispatch (`Hide`) with side-effect cleanup (taking the
-    /// pending backend ID). Always use this method instead of dispatching
-    /// `SummarizeIntent::Hide` directly — the latter would skip cleanup.
-    pub fn complete_summarization(&mut self) -> Option<String> {
-        self.dispatch_summarize(SummarizeIntent::Hide);
-        self.pending_backend_switch.take()
-    }
-
-    /// Cancel the pending backend switch.
-    ///
-    /// Bundles MVI dispatch (`Hide`) with side-effect cleanup (clearing the
-    /// pending switch and scheduled retry). Always use this method instead of
-    /// dispatching `SummarizeIntent::Hide` directly — the latter would skip cleanup.
-    pub fn cancel_summarization(&mut self) {
-        self.dispatch_summarize(SummarizeIntent::Hide);
-        self.pending_backend_switch = None;
-        self.scheduled_retry_at = None;
-    }
-
-    /// Get the currently selected button (0 = Retry, 1 = Cancel).
-    pub fn summarize_button_selection(&self) -> u8 {
-        self.summarize_dialog.selected_button()
-    }
-
-    /// Retry summarization for the pending backend switch.
-    pub fn retry_summarization(&mut self) {
-        if let Some(backend_id) = self.pending_backend_switch.as_ref().map(String::from) {
-            self.dispatch_summarize(SummarizeIntent::Start);
-            self.request_summarize_and_switch(backend_id);
-        }
-    }
-
-    /// Handle a summarization error: dispatch to reducer and schedule auto-retry if needed.
-    pub fn handle_summarize_error(&mut self, message: String) {
-        self.dispatch_summarize(SummarizeIntent::Error { message });
-        if let Some(attempt) = self.summarize_dialog.retry_attempt() {
-            self.schedule_retry(attempt);
-        }
-    }
-
-    /// Check if a scheduled auto-retry is due and trigger it.
-    pub fn check_auto_retry(&mut self) {
-        if self.is_retry_due() {
-            self.retry_summarization();
-        }
-    }
-
-    /// Check and update animation tick. Returns true if tick should be sent.
-    pub fn should_animate(&mut self, interval: Duration) -> bool {
-        if self.is_summarize_dialog_visible() && self.last_animation_tick.elapsed() >= interval {
-            self.last_animation_tick = Instant::now();
-            return true;
-        }
-        false
-    }
-
-    /// Schedule a retry with exponential backoff.
-    /// Delay: 1s for attempt 1, 2s for attempt 2, 4s for attempt 3.
-    pub fn schedule_retry(&mut self, attempt: u8) {
-        let delay_secs = 1u64 << (attempt.saturating_sub(1).min(4)); // 1, 2, 4, 8, 16 max
-        self.scheduled_retry_at = Some(Instant::now() + Duration::from_secs(delay_secs));
-    }
-
-    /// Clear any scheduled retry.
-    pub fn clear_scheduled_retry(&mut self) {
-        self.scheduled_retry_at = None;
-    }
-
-    /// Check if a scheduled retry is due. Returns true and clears if due.
-    pub fn is_retry_due(&mut self) -> bool {
-        if let Some(scheduled) = self.scheduled_retry_at {
-            if Instant::now() >= scheduled {
-                self.scheduled_retry_at = None;
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Get seconds remaining until scheduled retry (for UI display).
-    pub fn retry_countdown_secs(&self) -> Option<u64> {
-        self.scheduled_retry_at.map(|scheduled| {
-            scheduled.saturating_duration_since(Instant::now()).as_secs()
-        })
     }
 
     // ========================================================================

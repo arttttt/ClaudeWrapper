@@ -7,8 +7,6 @@ pub struct Config {
     #[serde(default)]
     pub proxy: ProxyConfig,
     #[serde(default)]
-    pub thinking: ThinkingConfig,
-    #[serde(default)]
     pub terminal: TerminalConfig,
     #[serde(default)]
     pub debug_logging: DebugLoggingConfig,
@@ -51,40 +49,6 @@ pub struct ProxyConfig {
     /// Base URL exposed to Claude Code (scheme + host + port).
     #[serde(default = "default_proxy_base_url")]
     pub base_url: String,
-}
-
-/// Thinking block compatibility settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThinkingConfig {
-    #[serde(default)]
-    pub mode: ThinkingMode,
-    /// Configuration for summarize mode (used when mode = "summarize")
-    #[serde(default)]
-    pub summarize: SummarizeConfig,
-}
-
-/// Configuration for the summarize thinking mode.
-///
-/// When switching backends, this mode summarizes the session history
-/// using an LLM call to an Anthropic-compatible API.
-/// All fields are required when using summarize mode.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SummarizeConfig {
-    /// Base URL for the summarization API (Anthropic-compatible endpoint).
-    #[serde(default)]
-    pub base_url: String,
-
-    /// API key for summarization.
-    #[serde(default)]
-    pub api_key: Option<String>,
-
-    /// Model to use for summarization.
-    #[serde(default)]
-    pub model: String,
-
-    /// Maximum tokens in the generated summary.
-    #[serde(default = "default_summarize_max_tokens")]
-    pub max_tokens: u32,
 }
 
 /// Terminal display settings.
@@ -162,24 +126,6 @@ pub enum DebugLogRotationMode {
     Daily,
 }
 
-/// Handling mode for thinking blocks.
-///
-/// # Modes
-///
-/// - `Strip` (recommended): Remove thinking blocks entirely. Simple and compatible.
-/// - `Summarize` (future): Keep native during work, summarize on backend switch.
-/// - `Native` (future): Keep native format, requires handoff on switch.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ThinkingMode {
-    /// Remove thinking blocks entirely (recommended)
-    Strip,
-    /// Keep native during work, summarize on backend switch (future)
-    Summarize,
-    /// Keep native format with handoff on switch (future)
-    Native,
-}
-
 fn default_connect_timeout() -> u32 {
     5
 }
@@ -238,10 +184,6 @@ fn default_proxy_bind_addr() -> String {
 
 fn default_proxy_base_url() -> String {
     "http://127.0.0.1:8080".to_string()
-}
-
-fn default_summarize_max_tokens() -> u32 {
-    500
 }
 
 /// Backend configuration for an API provider.
@@ -314,7 +256,6 @@ impl Default for Config {
         Self {
             defaults: Defaults::default(),
             proxy: ProxyConfig::default(),
-            thinking: ThinkingConfig::default(),
             terminal: TerminalConfig::default(),
             debug_logging: DebugLoggingConfig::default(),
             backends: vec![Backend::default()],
@@ -327,42 +268,6 @@ impl Default for ProxyConfig {
         Self {
             bind_addr: default_proxy_bind_addr(),
             base_url: default_proxy_base_url(),
-        }
-    }
-}
-
-impl Default for ThinkingConfig {
-    fn default() -> Self {
-        Self {
-            mode: ThinkingMode::Strip,
-            summarize: SummarizeConfig::default(),
-        }
-    }
-}
-
-impl Default for SummarizeConfig {
-    fn default() -> Self {
-        Self {
-            base_url: String::new(),
-            api_key: None,
-            model: String::new(),
-            max_tokens: default_summarize_max_tokens(),
-        }
-    }
-}
-
-impl Default for ThinkingMode {
-    fn default() -> Self {
-        ThinkingMode::Strip
-    }
-}
-
-impl std::fmt::Display for ThinkingMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ThinkingMode::Strip => write!(f, "strip"),
-            ThinkingMode::Summarize => write!(f, "summarize"),
-            ThinkingMode::Native => write!(f, "native"),
         }
     }
 }

@@ -1,7 +1,5 @@
-use crate::config::ThinkingMode;
 use crate::ui::app::{App, PopupKind};
 use crate::ui::history::HistoryIntent;
-use crate::ui::summarization::{SummarizeDialogState, SummarizeIntent};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// Action to take after processing a key event.
@@ -31,11 +29,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
     }
 
     if app.show_popup() {
-        // Handle summarization dialog when visible (has priority)
-        if app.is_summarize_dialog_visible() {
-            return handle_summarize_dialog_key(app, key);
-        }
-
         // Handle history dialog keys
         if matches!(app.popup_kind(), Some(PopupKind::History)) {
             match key.code {
@@ -167,18 +160,6 @@ fn handle_backend_switch_enter(app: &mut App) -> InputAction {
         return InputAction::None;
     }
 
-    // Check if summarize mode is enabled
-    let config = app.config().get();
-    if config.thinking.mode == ThinkingMode::Summarize {
-        let backend_id = backend.id.clone();
-        // Start summarization flow
-        if let Some(id) = app.request_summarize_and_switch(backend_id.clone()) {
-            app.start_summarization_for_switch(id);
-        }
-        return InputAction::None;
-    }
-
-    // Normal mode: switch immediately
     if app.request_switch_backend_by_index(index + 1) {
         app.close_popup();
     }
@@ -198,65 +179,9 @@ fn handle_backend_switch_by_number(app: &mut App, index: usize) -> InputAction {
         return InputAction::None;
     }
 
-    let config = app.config().get();
-    if config.thinking.mode == ThinkingMode::Summarize {
-        let backend_id = backend.id.clone();
-        if let Some(id) = app.request_summarize_and_switch(backend_id.clone()) {
-            app.start_summarization_for_switch(id);
-        }
-        return InputAction::None;
-    }
-
     if app.request_switch_backend_by_index(index) {
         app.close_popup();
     }
     InputAction::None
 }
 
-/// Handle key events when summarization dialog is visible.
-fn handle_summarize_dialog_key(app: &mut App, key: KeyEvent) -> InputAction {
-    match app.summarize_dialog() {
-        // In progress: only Esc cancels
-        SummarizeDialogState::Summarizing { .. } | SummarizeDialogState::Retrying { .. } => {
-            if matches!(key.code, KeyCode::Esc) {
-                app.cancel_summarization();
-                return InputAction::None;
-            }
-        }
-
-        // Failed: Tab toggles buttons, Enter selects, Esc/R/C shortcuts
-        SummarizeDialogState::Failed { .. } => {
-            match key.code {
-                KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
-                    app.dispatch_summarize(SummarizeIntent::ToggleButton);
-                }
-                KeyCode::Enter => {
-                    if app.summarize_button_selection() == 0 {
-                        app.retry_summarization();
-                        return InputAction::None;
-                    } else {
-                        app.cancel_summarization();
-                        return InputAction::None;
-                    }
-                }
-                KeyCode::Esc => {
-                    app.cancel_summarization();
-                    return InputAction::None;
-                }
-                KeyCode::Char('r') | KeyCode::Char('R') => {
-                    app.retry_summarization();
-                    return InputAction::None;
-                }
-                KeyCode::Char('c') | KeyCode::Char('C') => {
-                    app.cancel_summarization();
-                    return InputAction::None;
-                }
-                _ => {}
-            }
-        }
-
-        SummarizeDialogState::Hidden => {}
-    }
-
-    InputAction::None
-}

@@ -289,7 +289,6 @@ mod tests {
                 retry_backoff_base_ms: 100,
             },
             proxy: crate::config::ProxyConfig::default(),
-            thinking: crate::config::ThinkingConfig::default(),
             terminal: crate::config::TerminalConfig::default(),
             debug_logging: crate::config::DebugLoggingConfig::default(),
             backends: vec![

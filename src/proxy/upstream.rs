@@ -6,7 +6,6 @@ use reqwest::Client;
 use tokio::time::sleep;
 use crate::backend::BackendState;
 use crate::config::{build_auth_header, DebugLogLevel};
-use crate::config::ConfigStore;
 use crate::metrics::{
     redact_body, redact_headers, DebugLogger, ObservedStream, ObservabilityHub, RequestMeta,
     RequestParser, RequestSpan, ResponseMeta, ResponseParser, ResponsePreview,
@@ -21,7 +20,6 @@ pub struct UpstreamClient {
     client: Client,
     timeout_config: TimeoutConfig,
     pool_config: PoolConfig,
-    config: ConfigStore,
     transformer_registry: Arc<TransformerRegistry>,
     debug_logger: Arc<DebugLogger>,
     request_parser: RequestParser,
@@ -32,7 +30,6 @@ impl UpstreamClient {
     pub fn new(
         timeout_config: TimeoutConfig,
         pool_config: PoolConfig,
-        config: ConfigStore,
         transformer_registry: Arc<TransformerRegistry>,
         debug_logger: Arc<DebugLogger>,
     ) -> Self {
@@ -47,7 +44,6 @@ impl UpstreamClient {
             client,
             timeout_config,
             pool_config,
-            config,
             transformer_registry,
             debug_logger,
             request_parser: RequestParser::new(true),
@@ -198,10 +194,6 @@ impl UpstreamClient {
         let thinking_session_id = self.transformer_registry.current_thinking_session();
 
         if request_content_type.contains("application/json") {
-            self.transformer_registry
-                .update_mode(self.config.get().thinking.mode.clone())
-                .await;
-
             if let Ok(mut json_body) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
                 is_streaming_request = json_body
                     .get("stream")
@@ -781,18 +773,11 @@ mod tests {
 
 impl Default for UpstreamClient {
     fn default() -> Self {
-        let config = ConfigStore::new(
-            crate::config::Config::default(),
-            crate::config::Config::config_path(),
-        );
-        let registry = Arc::new(TransformerRegistry::with_mode(
-            crate::config::ThinkingMode::Strip,
-        ));
-        let debug_logger = Arc::new(DebugLogger::new(config.get().debug_logging.clone()));
+        let registry = Arc::new(TransformerRegistry::new(None));
+        let debug_logger = Arc::new(DebugLogger::new(Default::default()));
         Self::new(
             TimeoutConfig::default(),
             PoolConfig::default(),
-            config,
             registry,
             debug_logger,
         )

@@ -11,7 +11,6 @@ use crate::ui::history::HistoryEntry;
 use crate::ui::input::{handle_key, InputAction};
 use crate::ui::layout::body_rect;
 use crate::ui::render::draw;
-use crate::ui::summarization::SummarizeIntent;
 use crate::ui::terminal_guard::setup_terminal;
 use ratatui::layout::Rect;
 use std::io;
@@ -24,7 +23,6 @@ const UI_COMMAND_BUFFER: usize = 32;
 const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const METRICS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const BACKENDS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
-const ANIMATION_TICK_INTERVAL: Duration = Duration::from_millis(100);
 
 pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Result<()> {
     // Initialize tracing (file logging if CLAUDE_WRAPPER_LOG is set)
@@ -193,12 +191,6 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
             Ok(AppEvent::ImagePaste(data_uri)) => app.on_image_paste(&data_uri),
             Ok(AppEvent::Tick) => {
                 app.on_tick();
-                // Animation tick for summarization spinner
-                if app.should_animate(ANIMATION_TICK_INTERVAL) {
-                    app.dispatch_summarize(SummarizeIntent::AnimationTick);
-                }
-                // Check for scheduled auto-retry
-                app.check_auto_retry();
                 if app.should_refresh_status(STATUS_REFRESH_INTERVAL) {
                     app.request_status_refresh();
                 }
@@ -264,16 +256,6 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 );
                 app.request_quit();
             }
-            Ok(AppEvent::SummarizeSuccess { .. }) => {
-                app.clear_scheduled_retry();
-                app.complete_summarization();
-                app.close_popup();
-                app.request_backends_refresh();
-                app.request_status_refresh();
-            }
-            Ok(AppEvent::SummarizeError { message }) => {
-                app.handle_summarize_error(message);
-            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -325,23 +307,6 @@ async fn run_ui_bridge(
                     }
                     Err(err) => {
                         let _ = event_tx.send(AppEvent::IpcError(err.to_string()));
-                    }
-                }
-            }
-            UiCommand::SummarizeAndSwitchBackend { from_backend, to_backend } => {
-                match ipc_client.summarize_and_switch_backend(from_backend, to_backend).await {
-                    Ok(Ok(summary_preview)) => {
-                        let _ = event_tx.send(AppEvent::SummarizeSuccess { summary_preview });
-                    }
-                    Ok(Err(err)) => {
-                        let _ = event_tx.send(AppEvent::SummarizeError {
-                            message: err.to_string(),
-                        });
-                    }
-                    Err(err) => {
-                        let _ = event_tx.send(AppEvent::SummarizeError {
-                            message: err.to_string(),
-                        });
                     }
                 }
             }

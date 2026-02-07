@@ -35,54 +35,14 @@ impl IpcServer {
                     backend_id,
                     respond_to,
                 } => {
-                    let old_backend = backend_state.get_active_backend();
                     let result = backend_state
                         .switch_backend(&backend_id)
                         .map(|_| backend_state.get_active_backend());
                     if result.is_ok() {
-                        if let Err(e) = transformer_registry
-                            .on_backend_switch(&old_backend, &backend_id)
-                            .await
-                        {
-                            tracing::warn!(
-                                error = %e,
-                                "on_backend_switch failed during SwitchBackend"
-                            );
-                        }
+                        transformer_registry.notify_backend_for_thinking(&backend_id);
                     }
                     if respond_to.send(result).is_err() {
                         tracing::trace!("IPC: SwitchBackend response dropped (receiver gone)");
-                    }
-                }
-                IpcCommand::SummarizeAndSwitchBackend {
-                    from_backend,
-                    to_backend,
-                    respond_to,
-                } => {
-                    // 1. Call transformer to summarize
-                    let summarize_result = transformer_registry
-                        .on_backend_switch(&from_backend, &to_backend)
-                        .await;
-
-                    let result = match summarize_result {
-                        Ok(()) => {
-                            // 2. Switch backend
-                            if let Err(e) = backend_state.switch_backend(&to_backend) {
-                                Err(crate::proxy::thinking::TransformError::Config(
-                                    e.to_string(),
-                                ))
-                            } else {
-                                // Return a preview of success
-                                Ok("Session summarized".to_string())
-                            }
-                        }
-                        Err(e) => Err(e),
-                    };
-
-                    if respond_to.send(result).is_err() {
-                        tracing::trace!(
-                            "IPC: SummarizeAndSwitchBackend response dropped (receiver gone)"
-                        );
                     }
                 }
                 IpcCommand::GetStatus { respond_to } => {
@@ -97,7 +57,7 @@ impl IpcServer {
                         uptime_seconds: started_at.elapsed().as_secs(),
                         total_requests,
                         healthy: !shutdown.is_shutting_down(),
-                        thinking_mode: transformer_registry.current_mode().to_string(),
+                        thinking_mode: "native".to_string(),
                     };
                     if respond_to.send(status).is_err() {
                         tracing::trace!("IPC: GetStatus response dropped (receiver gone)");
