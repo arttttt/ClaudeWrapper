@@ -470,12 +470,20 @@ impl App {
     }
 
     /// Complete the pending backend switch after successful summarization.
+    ///
+    /// Bundles MVI dispatch (`Hide`) with side-effect cleanup (taking the
+    /// pending backend ID). Always use this method instead of dispatching
+    /// `SummarizeIntent::Hide` directly — the latter would skip cleanup.
     pub fn complete_summarization(&mut self) -> Option<String> {
         self.dispatch_summarize(SummarizeIntent::Hide);
         self.pending_backend_switch.take()
     }
 
     /// Cancel the pending backend switch.
+    ///
+    /// Bundles MVI dispatch (`Hide`) with side-effect cleanup (clearing the
+    /// pending switch and scheduled retry). Always use this method instead of
+    /// dispatching `SummarizeIntent::Hide` directly — the latter would skip cleanup.
     pub fn cancel_summarization(&mut self) {
         self.dispatch_summarize(SummarizeIntent::Hide);
         self.pending_backend_switch = None;
