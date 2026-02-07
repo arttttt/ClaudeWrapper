@@ -25,7 +25,7 @@ const LOG_CHANNEL_SIZE: usize = 512;
 pub enum LogEvent {
     /// Standard proxy request/response event.
     Request(DebugLogEvent),
-    /// Auxiliary event (summarizer, internal operations).
+    /// Auxiliary event (internal operations).
     Auxiliary(AuxiliaryLogEvent),
 }
 
@@ -47,7 +47,7 @@ pub struct DebugLogEvent {
     pub response_meta: Option<ResponseMeta>,
 }
 
-/// Auxiliary log event for internal operations (summarizer, etc).
+/// Auxiliary log event for internal operations.
 #[derive(Debug, Clone)]
 pub struct AuxiliaryLogEvent {
     pub timestamp: SystemTime,
@@ -92,7 +92,7 @@ impl DebugLogger {
         *self.config.write() = config;
     }
 
-    /// Log an auxiliary event (summarizer, internal operations).
+    /// Log an auxiliary event (internal operations).
     pub fn log_auxiliary(
         &self,
         operation: &str,

@@ -8,8 +8,4 @@ pub enum TransformError {
     /// JSON parsing or serialization error
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
-
-    /// Configuration error
-    #[error("Configuration error: {0}")]
-    Config(String),
 }

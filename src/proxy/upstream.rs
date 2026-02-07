@@ -177,7 +177,7 @@ impl UpstreamClient {
             );
         }
 
-        // Apply transformer for summarization (prepend summary, save messages)
+        // Apply thinking transformer
         let mut body_bytes = body_bytes;
         let needs_thinking_compat = backend.needs_thinking_compat();
 
@@ -247,17 +247,16 @@ impl UpstreamClient {
                     path_and_query,
                 );
 
-                let transformer = self.transformer_registry.get().await;
+                let transformer = self.transformer_registry.transformer();
                 let mut transformer_changed = false;
 
-                match transformer.transform_request(&mut json_body, &context).await {
+                match transformer.transform_request(&mut json_body, &context) {
                     Ok(result) => {
                         transformer_changed = result.changed;
                         if result.changed {
                             tracing::info!(
                                 backend = %backend.name,
                                 transformer = transformer.name(),
-                                summarized = result.stats.summarized_count,
                                 "Applied transformer"
                             );
                         }
@@ -476,7 +475,7 @@ impl UpstreamClient {
                 None
             };
 
-            // Create callback to capture response for summarization and thinking registration
+            // Create callback to capture response for thinking registration
             let registry = Arc::clone(&self.transformer_registry);
             let cb_debug_logger = Arc::clone(&self.debug_logger);
             let on_complete: crate::metrics::ResponseCompleteCallback = Box::new(move |bytes| {
@@ -511,12 +510,6 @@ impl UpstreamClient {
                     None,
                 );
 
-                // Async response handler (summarization etc.) can run in background
-                let registry = Arc::clone(&registry);
-                let bytes = bytes.to_vec();
-                tokio::spawn(async move {
-                    registry.on_response_complete(&bytes).await;
-                });
             });
 
             let observed = ObservedStream::new(
@@ -773,7 +766,7 @@ mod tests {
 
 impl Default for UpstreamClient {
     fn default() -> Self {
-        let registry = Arc::new(TransformerRegistry::new(None));
+        let registry = Arc::new(TransformerRegistry::new());
         let debug_logger = Arc::new(DebugLogger::new(Default::default()));
         Self::new(
             TimeoutConfig::default(),

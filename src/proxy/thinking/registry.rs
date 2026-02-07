@@ -88,11 +88,12 @@ impl ThinkingRegistry {
     /// This invalidates all thinking blocks from previous sessions.
     pub fn on_backend_switch(&mut self, new_backend: &str) {
         if self.current_backend != new_backend {
+            let old_backend_name = self.current_backend.clone();
             let old_session = self.current_session;
             self.current_session += 1;
             self.current_backend = new_backend.to_string();
             tracing::info!(
-                old_backend = %if old_session == 0 { "<none>" } else { &self.current_backend },
+                old_backend = %if old_session == 0 { "<none>" } else { &old_backend_name },
                 new_backend = %new_backend,
                 old_session = old_session,
                 new_session = self.current_session,

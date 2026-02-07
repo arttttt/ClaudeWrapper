@@ -38,9 +38,7 @@ impl ProxyServer {
         let debug_logger = Arc::new(DebugLogger::new(config.get().debug_logging.clone()));
         let observability = ObservabilityHub::new(1000)
             .with_plugins(vec![debug_logger.clone()]);
-        let transformer_registry = Arc::new(TransformerRegistry::new(
-            Some(debug_logger.clone()),
-        ));
+        let transformer_registry = Arc::new(TransformerRegistry::new());
         let router = RouterEngine::new(
             config,
             timeout_config,
