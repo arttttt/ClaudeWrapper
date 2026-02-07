@@ -171,13 +171,6 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     InputAction::ImagePaste => {
                         handle_image_paste(&mut app, &mut clipboard);
                     }
-                    InputAction::RetrySummarization => {
-                        // Re-trigger the summarization
-                        if let Some(backend_id) = app.pending_backend_switch().map(String::from) {
-                            app.dispatch_summarize(SummarizeIntent::Start);
-                            app.request_summarize_and_switch(backend_id);
-                        }
-                    }
                 }
             }
             Ok(AppEvent::Mouse(mouse)) => {
@@ -205,11 +198,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     app.dispatch_summarize(SummarizeIntent::AnimationTick);
                 }
                 // Check for scheduled auto-retry
-                if app.is_retry_due() {
-                    if let Some(backend_id) = app.pending_backend_switch().map(String::from) {
-                        app.request_summarize_and_switch(backend_id);
-                    }
-                }
+                app.check_auto_retry();
                 if app.should_refresh_status(STATUS_REFRESH_INTERVAL) {
                     app.request_status_refresh();
                 }
@@ -283,11 +272,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 app.request_status_refresh();
             }
             Ok(AppEvent::SummarizeError { message }) => {
-                app.dispatch_summarize(SummarizeIntent::Error { message: message.clone() });
-                // Schedule auto-retry with exponential backoff if in Retrying state
-                if let Some(attempt) = app.summarize_dialog().retry_attempt() {
-                    app.schedule_retry(attempt);
-                }
+                app.handle_summarize_error(message);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,

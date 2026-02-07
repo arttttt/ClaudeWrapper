@@ -11,8 +11,6 @@ pub enum InputAction {
     None,
     /// Request image paste from clipboard.
     ImagePaste,
-    /// Retry summarization (used when in Failed state).
-    RetrySummarization,
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
@@ -237,7 +235,8 @@ fn handle_summarize_dialog_key(app: &mut App, key: KeyEvent) -> InputAction {
                 }
                 KeyCode::Enter => {
                     if app.summarize_button_selection() == 0 {
-                        return InputAction::RetrySummarization;
+                        app.retry_summarization();
+                        return InputAction::None;
                     } else {
                         app.cancel_summarization();
                         return InputAction::None;
@@ -248,7 +247,8 @@ fn handle_summarize_dialog_key(app: &mut App, key: KeyEvent) -> InputAction {
                     return InputAction::None;
                 }
                 KeyCode::Char('r') | KeyCode::Char('R') => {
-                    return InputAction::RetrySummarization;
+                    app.retry_summarization();
+                    return InputAction::None;
                 }
                 KeyCode::Char('c') | KeyCode::Char('C') => {
                     app.cancel_summarization();

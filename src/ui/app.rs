@@ -487,6 +487,29 @@ impl App {
         self.summarize_dialog.selected_button()
     }
 
+    /// Retry summarization for the pending backend switch.
+    pub fn retry_summarization(&mut self) {
+        if let Some(backend_id) = self.pending_backend_switch.as_ref().map(String::from) {
+            self.dispatch_summarize(SummarizeIntent::Start);
+            self.request_summarize_and_switch(backend_id);
+        }
+    }
+
+    /// Handle a summarization error: dispatch to reducer and schedule auto-retry if needed.
+    pub fn handle_summarize_error(&mut self, message: String) {
+        self.dispatch_summarize(SummarizeIntent::Error { message });
+        if let Some(attempt) = self.summarize_dialog.retry_attempt() {
+            self.schedule_retry(attempt);
+        }
+    }
+
+    /// Check if a scheduled auto-retry is due and trigger it.
+    pub fn check_auto_retry(&mut self) {
+        if self.is_retry_due() {
+            self.retry_summarization();
+        }
+    }
+
     /// Check and update animation tick. Returns true if tick should be sent.
     pub fn should_animate(&mut self, interval: Duration) -> bool {
         if self.is_summarize_dialog_visible() && self.last_animation_tick.elapsed() >= interval {
