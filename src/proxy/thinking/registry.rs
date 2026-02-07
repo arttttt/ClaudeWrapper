@@ -374,6 +374,13 @@ impl ThinkingRegistry {
 
     /// Cleanup cache: remove old session blocks and orphaned blocks.
     fn cleanup_cache(&mut self, request_hashes: &HashSet<u64>, now: Instant) -> CleanupStats {
+        // If the request carries no thinking blocks at all, it's uninformative
+        // about which blocks are still needed (e.g. haiku sub-request where
+        // claude-cli strips thinking from history). Only apply Rule 1.
+        if request_hashes.is_empty() {
+            return self.cleanup_old_sessions();
+        }
+
         let mut stats = CleanupStats::default();
         let threshold = self.orphan_threshold;
 
@@ -996,19 +1003,20 @@ data: {\"type\":\"content_block_stop\",\"index\":0}\n";
         // Use zero threshold - any unconfirmed block not in request is removed
         let mut registry = ThinkingRegistry::with_orphan_threshold(Duration::ZERO);
         registry.on_backend_switch("anthropic");
+        let session = registry.current_session();
 
-        // Register block
-        let response = make_response_with_thinking(&["Thought A"]);
-        registry.register_from_response(&response, registry.current_session());
+        // Register two blocks: one will be in the request, one won't (orphan)
+        let response = make_response_with_thinking(&["Thought A", "Thought B"]);
+        registry.register_from_response(&response, session);
+        assert_eq!(registry.block_count(), 2);
 
-        // Request with history but without the block - should remove as orphan (threshold=0)
-        let mut request = json!({"messages": [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "content": "hi"}
-        ]});
+        // Request contains only "Thought B" — "Thought A" is orphaned.
+        // request_hashes is non-empty so Rules 2/3 apply.
+        let mut request = make_request_with_thinking(&["Thought B"]);
         registry.filter_request(&mut request);
 
-        assert_eq!(registry.block_count(), 0);
+        // "Thought A" should be removed (orphan, threshold=0), "Thought B" kept
+        assert_eq!(registry.block_count(), 1);
     }
 
     // ========================================================================
@@ -1463,5 +1471,164 @@ data: {\"type\":\"content_block_stop\",\"index\":0}\n";
         let stats = registry.cache_stats();
         assert_eq!(stats.confirmed, 2);
         assert_eq!(stats.unconfirmed, 1);
+    }
+
+    // ========================================================================
+    // Haiku sub-request eviction bug tests
+    // ========================================================================
+
+    /// Helper: make a request with assistant messages but NO thinking blocks.
+    /// Simulates a haiku sub-request where claude-cli strips thinking from
+    /// the history before sending (haiku doesn't support thinking).
+    fn make_request_without_thinking_but_with_history() -> Value {
+        json!({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Hello"
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "I'll help you with that."}
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": "Do something"
+                }
+            ]
+        })
+    }
+
+    /// Core bug: haiku sub-request with history evicts confirmed thinking blocks.
+    ///
+    /// Scenario from production logs:
+    /// 1. Opus response registers thinking block
+    /// 2. Opus request confirms the block (block present in history)
+    /// 3. Haiku sub-request arrives with history but WITHOUT thinking blocks
+    ///    (claude-cli strips thinking for haiku)
+    /// 4. Rule 2 fires: confirmed=true, not in request → evicts block
+    /// 5. Next opus request can't find block in cache → INCORRECTLY strips it
+    #[test]
+    fn test_haiku_subrequest_must_not_evict_confirmed_blocks() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+        let session = registry.current_session();
+
+        // 1. Opus response registers a thinking block
+        let response = make_response_with_thinking(&["Deep analysis of the problem"]);
+        registry.register_from_response(&response, session);
+        assert_eq!(registry.block_count(), 1);
+
+        // 2. Opus request contains the thinking block → confirms it
+        let mut opus_request = make_request_with_thinking(&["Deep analysis of the problem"]);
+        let removed = registry.filter_request(&mut opus_request);
+        assert_eq!(removed, 0, "Block should be kept (same session)");
+
+        let stats = registry.cache_stats();
+        assert_eq!(stats.confirmed, 1, "Block should be confirmed");
+        assert_eq!(stats.total, 1);
+
+        // 3. Haiku sub-request: has history (assistant messages) but NO thinking blocks
+        let mut haiku_request = make_request_without_thinking_but_with_history();
+        registry.filter_request(&mut haiku_request);
+
+        // 4. Cache should still contain the block
+        assert_eq!(
+            registry.block_count(),
+            1,
+            "Haiku sub-request must NOT evict confirmed thinking blocks"
+        );
+
+        // 5. Next opus request should still find the block
+        let mut next_opus_request = make_request_with_thinking(&["Deep analysis of the problem"]);
+        let removed = registry.filter_request(&mut next_opus_request);
+        assert_eq!(
+            removed, 0,
+            "Valid thinking block from current session should NOT be stripped"
+        );
+    }
+
+    /// Variant: multiple confirmed blocks survive haiku sub-request.
+    #[test]
+    fn test_multiple_blocks_survive_haiku_subrequest() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+        let session = registry.current_session();
+
+        // Register 3 thinking blocks from successive opus responses
+        for thought in &["Thought A", "Thought B", "Thought C"] {
+            let response = make_response_with_thinking(&[thought]);
+            registry.register_from_response(&response, session);
+        }
+        assert_eq!(registry.block_count(), 3);
+
+        // Opus request confirms all 3
+        let mut opus_request =
+            make_request_with_thinking(&["Thought A", "Thought B", "Thought C"]);
+        let removed = registry.filter_request(&mut opus_request);
+        assert_eq!(removed, 0);
+        assert_eq!(registry.cache_stats().confirmed, 3);
+
+        // Series of haiku sub-requests (tool approval, bash check, etc.)
+        for _ in 0..5 {
+            let mut haiku = make_request_without_thinking_but_with_history();
+            registry.filter_request(&mut haiku);
+        }
+
+        // All 3 blocks must survive
+        assert_eq!(
+            registry.block_count(),
+            3,
+            "All confirmed blocks must survive haiku sub-requests"
+        );
+
+        // Next opus request must keep all blocks
+        let mut next =
+            make_request_with_thinking(&["Thought A", "Thought B", "Thought C"]);
+        let removed = registry.filter_request(&mut next);
+        assert_eq!(removed, 0, "No blocks should be stripped");
+    }
+
+    /// Variant: interleaved opus and haiku requests (realistic CC workflow).
+    ///
+    /// Opus produces thinking → haiku does tool approval → haiku does bash →
+    /// opus continues with thinking in history.
+    #[test]
+    fn test_interleaved_opus_haiku_workflow() {
+        let mut registry = ThinkingRegistry::new();
+        registry.on_backend_switch("anthropic");
+        let session = registry.current_session();
+
+        // Turn 1: opus produces thinking
+        let resp1 = make_response_with_thinking(&["Planning step 1"]);
+        registry.register_from_response(&resp1, session);
+
+        // Turn 1 continued: opus request confirms it
+        let mut req1 = make_request_with_thinking(&["Planning step 1"]);
+        registry.filter_request(&mut req1);
+        assert_eq!(registry.cache_stats().confirmed, 1);
+
+        // Haiku: tool approval sub-request (no thinking)
+        let mut haiku1 = make_request_without_thinking_but_with_history();
+        registry.filter_request(&mut haiku1);
+
+        // Haiku: bash execution sub-request (no thinking)
+        let mut haiku2 = make_request_without_thinking_but_with_history();
+        registry.filter_request(&mut haiku2);
+
+        // Turn 2: opus produces another thinking block
+        let resp2 = make_response_with_thinking(&["Planning step 2"]);
+        registry.register_from_response(&resp2, session);
+
+        // Turn 2: opus request has both blocks in history
+        let mut req2 = make_request_with_thinking(&["Planning step 1", "Planning step 2"]);
+        let removed = registry.filter_request(&mut req2);
+        assert_eq!(
+            removed, 0,
+            "Both thinking blocks should be preserved after haiku sub-requests"
+        );
+        assert_eq!(registry.block_count(), 2);
     }
 }
