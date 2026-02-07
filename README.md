@@ -19,7 +19,8 @@ AnyClaude solves this:
 ## Features
 
 - **Hot-Swap Backends** — Switch between providers without restarting Claude
-- **Thinking Block Compatibility** — Automatic thinking block filtering on backend switch (per-backend `thinking_compat`)
+- **Thinking Block Filtering** — Automatic filtering of previous backend's thinking blocks on switch
+- **Adaptive Thinking Conversion** — Convert adaptive thinking to enabled format for non-Anthropic backends (`thinking_compat`)
 - **Transparent Proxy** — Routes API requests through active backend
 - **Image Paste** — Paste images from clipboard (Ctrl+V)
 - **Backend History** — View switch history with `Ctrl+H`
@@ -29,7 +30,7 @@ AnyClaude solves this:
 
 ```
 ┌─────────────────────────────┐
-│     AnyClaude TUI       │
+│        AnyClaude TUI        │
 └──────────────┬──────────────┘
                │
         ┌──────▼──────┐
@@ -45,16 +46,23 @@ AnyClaude solves this:
  Backend1  Backend2   Backend3
 ```
 
-## Building
+## Installation
+
+```bash
+cargo install --path .
+```
+
+Or build manually:
 
 ```bash
 cargo build --release
+# binary at ./target/release/anyclaude
 ```
 
 ## Usage
 
 ```bash
-./target/release/anyclaude
+anyclaude
 ```
 
 The wrapper automatically:
@@ -118,9 +126,9 @@ bind_addr = "127.0.0.1:8080"      # Local proxy listen address (auto-increments 
 scrollback_lines = 10000          # History buffer size
 
 [debug_logging]
-enabled = true
-level = "verbose"                 # "basic", "verbose", or "full"
-path = "~/.config/anyclaude/debug.log"
+level = "verbose"                 # "off", "basic", "verbose", "full"
+destination = "file"              # "stderr", "file", "both"
+file_path = "~/.config/anyclaude/debug.log"
 
 [[backends]]
 name = "anthropic"
@@ -134,7 +142,7 @@ display_name = "Alternative Provider"
 base_url = "https://your-provider.com/api"
 auth_type = "bearer"
 api_key = "your-api-key"
-thinking_compat = true            # Enable thinking block filtering on switch to this backend
+thinking_compat = true            # Convert adaptive→enabled thinking for this backend
 thinking_budget_tokens = 10000    # Default thinking budget for adaptive→enabled conversion
 
 [[backends]]
@@ -194,16 +202,37 @@ Enable detailed request/response logging for debugging:
 
 ```toml
 [debug_logging]
-enabled = true
-level = "verbose"   # "basic" | "verbose" | "full"
-path = "~/.config/anyclaude/debug.log"
+level = "verbose"                  # "off" | "basic" | "verbose" | "full"
+destination = "file"               # "stderr" | "file" | "both"
+file_path = "~/.config/anyclaude/debug.log"
+format = "console"                 # "console" | "json"
+pretty_print = true                # Pretty-print JSON bodies
+full_body = false                  # Log complete bodies (no size limit)
+body_preview_bytes = 1024          # Truncate preview if full_body = false
+header_preview = true              # Include headers in logs
+
+[debug_logging.rotation]
+mode = "size"                      # "none" | "size" | "daily"
+max_bytes = 10485760               # 10MB
+max_files = 5                      # Keep 5 rotated files
 ```
 
 | Level | Content |
 |-------|---------|
+| `off` | Disabled (default) |
 | `basic` | Request timestamps, status codes, latency |
 | `verbose` | + Token counts, model info, cost estimates |
 | `full` | + Request/response body previews, headers |
+
+## Development
+
+Requires [just](https://github.com/casey/just) task runner.
+
+| Command | Description |
+|---------|-------------|
+| `just check` | Run clippy + tests |
+| `just release 0.3.0` | Bump version, update CHANGELOG, commit, tag |
+| `just changelog` | Regenerate CHANGELOG.md |
 
 ## License
 
