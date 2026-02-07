@@ -5,10 +5,11 @@ use crate::metrics::MetricsSnapshot;
 use crate::pty::PtyHandle;
 use crate::ui::history::{HistoryDialogState, HistoryEntry, HistoryIntent, HistoryReducer};
 use crate::ui::mvi::Reducer;
-use crate::ui::pty_state::PtyState;
+use crate::ui::pty::{PtyIntent, PtyLifecycleState, PtyReducer};
 use crate::ui::summarization::{SummarizeDialogState, SummarizeIntent, SummarizeReducer};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -49,7 +50,10 @@ pub struct App {
     focus: Focus,
     status_message: Option<String>,
     size: Option<(u16, u16)>,
-    pty_state: PtyState,
+    /// PTY lifecycle state (MVI pattern).
+    pty_lifecycle: PtyLifecycleState,
+    /// PTY handle (resource, managed outside MVI).
+    pty_handle: Option<PtyHandle>,
     config: ConfigStore,
     error_registry: ErrorRegistry,
     ipc_sender: Option<UiCommandSender>,
@@ -87,7 +91,8 @@ impl App {
             focus: Focus::Terminal,
             status_message: None,
             size: None,
-            pty_state: PtyState::default(),
+            pty_lifecycle: PtyLifecycleState::default(),
+            pty_handle: None,
             config,
             error_registry: ErrorRegistry::new(100),
             ipc_sender: None,
@@ -167,7 +172,15 @@ impl App {
 
     /// Send input to PTY or buffer if not ready.
     fn send_input(&mut self, bytes: &[u8]) {
-        self.pty_state.send_input(bytes);
+        if self.pty_lifecycle.is_ready() {
+            if let Some(pty) = &self.pty_handle {
+                let _ = pty.send_input(bytes);
+            }
+        } else {
+            self.dispatch_pty(PtyIntent::BufferInput {
+                bytes: bytes.to_vec(),
+            });
+        }
     }
 
     pub fn on_paste(&mut self, text: &str) {
@@ -185,49 +198,61 @@ impl App {
 
     pub fn on_resize(&mut self, cols: u16, rows: u16) {
         self.size = Some((cols, rows));
-        if let Some(pty) = self.pty_state.pty_handle() {
+        if let Some(pty) = &self.pty_handle {
             let _ = pty.resize(cols, rows);
         }
     }
 
-    /// Attach PTY handle. Transitions from Pending to Attached state.
+    /// Attach PTY handle. Stores the resource and transitions state.
     pub fn attach_pty(&mut self, pty: PtyHandle) {
-        self.pty_state.attach(pty);
+        self.pty_handle = Some(pty);
+        self.dispatch_pty(PtyIntent::Attach);
     }
 
-    /// Called when PTY produces output. Transitions to Ready and flushes buffer.
+    /// Called when PTY produces output. Flushes buffer and transitions to Ready.
     pub fn on_pty_output(&mut self) {
-        self.pty_state.on_output();
+        // Extract buffer before state transition (side effect)
+        let buffer = match &mut self.pty_lifecycle {
+            PtyLifecycleState::Attached { buffer } => std::mem::take(buffer),
+            _ => VecDeque::new(),
+        };
+        self.dispatch_pty(PtyIntent::GotOutput);
+        // Flush buffered input now that Claude Code is ready
+        if let Some(pty) = &self.pty_handle {
+            for bytes in buffer {
+                let _ = pty.send_input(&bytes);
+            }
+        }
     }
 
     pub fn parser(&self) -> Option<Arc<Mutex<vt100::Parser>>> {
-        self.pty_state.pty_handle().map(|pty| pty.parser())
+        self.pty_handle.as_ref().map(|pty| pty.parser())
     }
 
     /// Scroll up (view older content).
     pub fn scroll_up(&mut self, lines: usize) {
-        if let Some(pty) = self.pty_state.pty_handle() {
+        if let Some(pty) = &self.pty_handle {
             pty.scroll_up(lines);
         }
     }
 
     /// Scroll down (view newer content).
     pub fn scroll_down(&mut self, lines: usize) {
-        if let Some(pty) = self.pty_state.pty_handle() {
+        if let Some(pty) = &self.pty_handle {
             pty.scroll_down(lines);
         }
     }
 
     /// Reset scrollback to live view.
     pub fn reset_scrollback(&mut self) {
-        if let Some(pty) = self.pty_state.pty_handle() {
+        if let Some(pty) = &self.pty_handle {
             pty.reset_scrollback();
         }
     }
 
     /// Get current scrollback offset.
     pub fn scrollback(&self) -> usize {
-        self.pty_state.pty_handle().map(|pty| pty.scrollback()).unwrap_or(0)
+        self.pty_handle.as_ref().map(|pty| pty.scrollback()).unwrap_or(0)
     }
 
     #[allow(dead_code)]
@@ -399,6 +424,18 @@ impl App {
     #[allow(dead_code)]
     pub fn config(&self) -> &ConfigStore {
         &self.config
+    }
+
+    // ========================================================================
+    // PTY lifecycle methods (MVI pattern)
+    // ========================================================================
+
+    /// Dispatch an intent to the PTY lifecycle reducer.
+    fn dispatch_pty(&mut self, intent: PtyIntent) {
+        self.pty_lifecycle = PtyReducer::reduce(
+            std::mem::take(&mut self.pty_lifecycle),
+            intent,
+        );
     }
 
     // ========================================================================

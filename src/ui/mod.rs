@@ -7,7 +7,7 @@ pub mod input;
 pub mod layout;
 pub mod mvi;
 pub mod popup;
-pub mod pty_state;
+pub mod pty;
 pub mod render;
 pub mod runtime;
 pub mod summarization;
