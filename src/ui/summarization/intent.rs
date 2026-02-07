@@ -11,9 +11,6 @@ pub enum SummarizeIntent {
     /// Animation tick (for spinner updates).
     AnimationTick,
 
-    /// Summarization completed successfully.
-    Success,
-
     /// An error occurred during summarization.
     Error {
         /// Error message.

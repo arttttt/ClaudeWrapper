@@ -34,8 +34,6 @@ impl Reducer for SummarizeReducer {
                 other => other,
             },
 
-            SummarizeIntent::Success => SummarizeDialogState::Hidden,
-
             SummarizeIntent::Error { message } => {
                 // Determine current attempt number
                 let current_attempt = match &state {
@@ -138,13 +136,6 @@ mod tests {
             }
             _ => panic!("Expected Failed state"),
         }
-    }
-
-    #[test]
-    fn success_transitions_to_hidden() {
-        let state = SummarizeDialogState::Summarizing { animation_tick: 0 };
-        let new_state = SummarizeReducer::reduce(state, SummarizeIntent::Success);
-        assert_eq!(new_state, SummarizeDialogState::Hidden);
     }
 
     #[test]
