@@ -22,8 +22,9 @@ pub fn render_history_dialog(frame: &mut Frame, state: &HistoryDialogState) {
         return;
     }
 
-    let inner_width = DIALOG_WIDTH.saturating_sub(2) as usize; // subtract borders
     let can_scroll = entries.len() > MAX_VISIBLE_ROWS;
+    // subtract borders; reserve 1 extra column for scrollbar when present
+    let inner_width = DIALOG_WIDTH.saturating_sub(if can_scroll { 3 } else { 2 }) as usize;
 
     let lines: Vec<Line> = entries
         .iter()
