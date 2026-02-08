@@ -1,3 +1,4 @@
+use crate::pty::emulator::TerminalEmulator;
 use parking_lot::Mutex;
 use portable_pty::{MasterPty, PtySize};
 use std::error::Error;
@@ -21,7 +22,7 @@ pub struct ResizeWatcher {
 impl ResizeWatcher {
     pub fn start(
         master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-        parser: Arc<Mutex<vt100::Parser>>,
+        emulator: Arc<Mutex<Box<dyn TerminalEmulator>>>,
     ) -> Result<Option<Self>, Box<dyn Error>> {
         #[cfg(unix)]
         {
@@ -40,7 +41,7 @@ impl ResizeWatcher {
                         pixel_height: 0,
                     };
                     let _ = master.lock().resize(size);
-                    parser.lock().screen_mut().set_size(rows, cols);
+                    emulator.lock().set_size(rows, cols);
                 }
             });
             Ok(Some(Self { handle, thread }))
@@ -49,7 +50,7 @@ impl ResizeWatcher {
         #[cfg(not(unix))]
         {
             let _ = master;
-            let _ = parser;
+            let _ = emulator;
             Ok(None)
         }
     }

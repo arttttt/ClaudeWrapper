@@ -26,16 +26,14 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         header,
     );
     frame.render_widget(Clear, body);
-    if let Some(parser) = app.parser() {
-        frame.render_widget(TerminalBody::new(Arc::clone(&parser)), body);
+    if let Some(emu) = app.emulator() {
+        frame.render_widget(TerminalBody::new(Arc::clone(&emu)), body);
         // Only show cursor when in live view (scrollback == 0) and terminal has focus
         if app.focus_is_terminal() && app.scrollback() == 0 && body.width > 0 && body.height > 0 {
-            let parser_guard = parser.lock();
-            let screen = parser_guard.screen();
-            if !screen.hide_cursor() {
-                let cursor = screen.cursor_position();
-                let x = body.x + cursor.1.min(body.width.saturating_sub(1));
-                let y = body.y + cursor.0.min(body.height.saturating_sub(1));
+            let cursor = emu.lock().cursor();
+            if cursor.visible {
+                let x = body.x + cursor.col.min(body.width.saturating_sub(1));
+                let y = body.y + cursor.row.min(body.height.saturating_sub(1));
                 frame.set_cursor_position((x, y));
             }
         }

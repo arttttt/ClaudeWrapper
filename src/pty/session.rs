@@ -1,3 +1,4 @@
+use crate::pty::emulator;
 use crate::pty::handle::PtyHandle;
 use crate::ui::events::{AppEvent, PtyError};
 use parking_lot::Mutex;
@@ -31,11 +32,7 @@ impl PtySession {
             pixel_height: 0,
         })?;
 
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(
-            rows,
-            cols,
-            scrollback_len,
-        )));
+        let emu = Arc::new(Mutex::new(emulator::create(rows, cols, scrollback_len)));
 
         let mut cmd = CommandBuilder::new(command);
         cmd.args(args);
@@ -51,9 +48,9 @@ impl PtySession {
         let reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
         let master = Arc::new(Mutex::new(pair.master));
-        let handle = PtyHandle::new(Arc::clone(&parser), writer, master);
+        let handle = PtyHandle::new(Arc::clone(&emu), writer, master);
 
-        let reader_parser = Arc::clone(&parser);
+        let reader_emu = Arc::clone(&emu);
         let reader_handle = thread::spawn(move || {
             let mut reader = reader;
             let mut buffer = [0u8; 8192];
@@ -73,7 +70,7 @@ impl PtySession {
                     }
                 };
 
-                reader_parser.lock().process(&buffer[..count]);
+                reader_emu.lock().process(&buffer[..count]);
                 let _ = notifier.send(AppEvent::PtyOutput);
             }
             // Notify UI that the child process has exited (only if no error already sent)
