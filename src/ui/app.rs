@@ -204,8 +204,10 @@ impl App {
         }
     }
 
-    pub fn parser(&self) -> Option<Arc<Mutex<vt100::Parser>>> {
-        self.pty_handle.as_ref().map(|pty| pty.parser())
+    pub fn emulator(
+        &self,
+    ) -> Option<Arc<Mutex<Box<dyn crate::pty::TerminalEmulator>>>> {
+        self.pty_handle.as_ref().map(|pty| pty.emulator())
     }
 
     /// Scroll up (view older content).

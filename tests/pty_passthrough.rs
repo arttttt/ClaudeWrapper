@@ -198,12 +198,12 @@ mod pty_passthrough {
     #[test]
     #[ignore]
     fn benchmark_vt_rendering() {
-        let mut parser = vt100::Parser::new(24, 80, 0);
+        let mut emu = anyclaude::pty::emulator::create(24, 80, 0);
         let payload = b"\x1b[2J\x1b[HThe quick brown fox jumps over the lazy dog\n";
         let iterations = 20_000;
         let start = Instant::now();
         for _ in 0..iterations {
-            parser.process(payload);
+            emu.process(payload);
         }
         let elapsed = start.elapsed();
         let per_sec = iterations as f64 / elapsed.as_secs_f64();

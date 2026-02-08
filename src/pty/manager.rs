@@ -1,3 +1,5 @@
+use crate::pty::emulator;
+use crate::pty::emulator::TerminalEmulator;
 use crate::pty::hotkey::is_wrapper_hotkey;
 use crate::pty::resize::ResizeWatcher;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size as terminal_size};
@@ -9,7 +11,7 @@ use std::sync::Arc;
 use std::thread;
 
 pub struct PtyManager {
-    parser: Arc<Mutex<vt100::Parser>>,
+    emulator: Arc<Mutex<Box<dyn TerminalEmulator>>>,
 }
 
 impl Default for PtyManager {
@@ -21,9 +23,8 @@ impl Default for PtyManager {
 impl PtyManager {
     pub fn new() -> Self {
         let (cols, rows) = terminal_size().unwrap_or((80, 24));
-        let parser = vt100::Parser::new(rows, cols, 0);
         Self {
-            parser: Arc::new(Mutex::new(parser)),
+            emulator: Arc::new(Mutex::new(emulator::create(rows, cols, 0))),
         }
     }
 
@@ -40,7 +41,7 @@ impl PtyManager {
             pixel_width: 0,
             pixel_height: 0,
         })?;
-        self.resize_parser(cols, rows);
+        self.resize_emulator(cols, rows);
 
         let mut cmd = CommandBuilder::new(command);
         cmd.args(args);
@@ -56,7 +57,7 @@ impl PtyManager {
         let writer = master.take_writer()?;
         let resize_master = Arc::new(Mutex::new(master));
         let resize_watcher =
-            ResizeWatcher::start(Arc::clone(&resize_master), Arc::clone(&self.parser))?;
+            ResizeWatcher::start(Arc::clone(&resize_master), Arc::clone(&self.emulator))?;
 
         let reader_handle = thread::spawn(move || {
             let mut reader = reader;
@@ -112,8 +113,8 @@ impl PtyManager {
         std::process::exit(status.exit_code() as i32);
     }
 
-    fn resize_parser(&self, cols: u16, rows: u16) {
-        self.parser.lock().screen_mut().set_size(rows, cols);
+    fn resize_emulator(&self, cols: u16, rows: u16) {
+        self.emulator.lock().set_size(rows, cols);
     }
 }
 

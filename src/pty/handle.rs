@@ -1,32 +1,32 @@
+use crate::pty::emulator::TerminalEmulator;
 use crate::pty::hotkey::is_wrapper_hotkey;
 use parking_lot::Mutex;
-use portable_pty::{MasterPty, PtySize};
-use std::error::Error;
+use portable_pty::MasterPty;
 use std::io::{self, Write};
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct PtyHandle {
-    parser: Arc<Mutex<vt100::Parser>>,
+    emulator: Arc<Mutex<Box<dyn TerminalEmulator>>>,
     writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
 }
 
 impl PtyHandle {
     pub fn new(
-        parser: Arc<Mutex<vt100::Parser>>,
+        emulator: Arc<Mutex<Box<dyn TerminalEmulator>>>,
         writer: Box<dyn Write + Send>,
         master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     ) -> Self {
         Self {
-            parser,
+            emulator,
             writer: Arc::new(Mutex::new(Some(writer))),
             master,
         }
     }
 
-    pub fn parser(&self) -> Arc<Mutex<vt100::Parser>> {
-        Arc::clone(&self.parser)
+    pub fn emulator(&self) -> Arc<Mutex<Box<dyn TerminalEmulator>>> {
+        Arc::clone(&self.emulator)
     }
 
     pub fn send_input(&self, bytes: &[u8]) -> io::Result<()> {
@@ -49,40 +49,40 @@ impl PtyHandle {
         Ok(())
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Box<dyn Error>> {
-        let size = PtySize {
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Box<dyn std::error::Error>> {
+        let size = portable_pty::PtySize {
             rows,
             cols,
             pixel_width: 0,
             pixel_height: 0,
         };
         self.master.lock().resize(size)?;
-        self.parser.lock().screen_mut().set_size(rows, cols);
+        self.emulator.lock().set_size(rows, cols);
         Ok(())
     }
 
     /// Get the current scrollback offset.
     pub fn scrollback(&self) -> usize {
-        self.parser.lock().screen().scrollback()
+        self.emulator.lock().scrollback()
     }
 
     /// Set the scrollback offset.
     pub fn set_scrollback(&self, offset: usize) {
-        self.parser.lock().screen_mut().set_scrollback(offset);
+        self.emulator.lock().set_scrollback(offset);
     }
 
     /// Scroll up by the given number of lines.
     pub fn scroll_up(&self, lines: usize) {
-        let mut parser = self.parser.lock();
-        let current = parser.screen().scrollback();
-        parser.screen_mut().set_scrollback(current.saturating_add(lines));
+        let mut emu = self.emulator.lock();
+        let current = emu.scrollback();
+        emu.set_scrollback(current.saturating_add(lines));
     }
 
     /// Scroll down by the given number of lines.
     pub fn scroll_down(&self, lines: usize) {
-        let mut parser = self.parser.lock();
-        let current = parser.screen().scrollback();
-        parser.screen_mut().set_scrollback(current.saturating_sub(lines));
+        let mut emu = self.emulator.lock();
+        let current = emu.scrollback();
+        emu.set_scrollback(current.saturating_sub(lines));
     }
 
     /// Reset scrollback to show current (live) content.
