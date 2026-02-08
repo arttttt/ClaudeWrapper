@@ -63,8 +63,9 @@ pub fn render_history_dialog(frame: &mut Frame, state: &HistoryDialogState) {
 
     // Scrollbar
     if can_scroll {
-        let mut scrollbar_state =
-            ScrollbarState::new(entries.len()).position(*scroll_offset);
+        let mut scrollbar_state = ScrollbarState::new(entries.len())
+            .position(*scroll_offset)
+            .viewport_content_length(MAX_VISIBLE_ROWS);
         // Limit scrollbar to content rows only (exclude borders and footer)
         let scrollbar_area = ratatui::layout::Rect {
             x: rect.x,
