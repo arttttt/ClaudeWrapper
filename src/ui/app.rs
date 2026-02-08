@@ -122,6 +122,11 @@ impl App {
         self.focus == Focus::Terminal
     }
 
+    /// True once the child process has produced its first output.
+    pub fn is_pty_ready(&self) -> bool {
+        self.pty_lifecycle.is_ready()
+    }
+
     pub fn toggle_popup(&mut self, kind: PopupKind) -> bool {
         self.focus = match self.focus {
             Focus::Popup(active) if active == kind => Focus::Terminal,
@@ -143,6 +148,10 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        // Block keyboard input while child is still starting
+        if !self.pty_lifecycle.is_ready() {
+            return;
+        }
         let Some(bytes) = key_event_to_bytes(key) else {
             return;
         };
@@ -163,14 +172,19 @@ impl App {
     }
 
     pub fn on_paste(&mut self, text: &str) {
-        // Send paste content wrapped in bracketed paste escape sequences
-        // so the subprocess knows this is pasted content
+        // Block paste input while child is still starting
+        if !self.pty_lifecycle.is_ready() {
+            return;
+        }
         let bracketed = format!("\x1b[200~{}\x1b[201~", text);
         self.send_input(bracketed.as_bytes());
     }
 
     pub fn on_image_paste(&mut self, data_uri: &str) {
-        // Send image data URI as text input
+        // Block paste input while child is still starting
+        if !self.pty_lifecycle.is_ready() {
+            return;
+        }
         let bracketed = format!("\x1b[200~{}\x1b[201~", data_uri);
         self.send_input(bracketed.as_bytes());
     }
@@ -188,15 +202,35 @@ impl App {
         self.dispatch_pty(PtyIntent::Attach);
     }
 
-    /// Called when PTY produces output. Flushes buffer and transitions to Ready.
+    /// Called when PTY produces output.
+    ///
+    /// Transitions to `Ready` only once the child process hides the hardware
+    /// cursor (DECTCEM off), which signals that it has taken control of terminal
+    /// rendering (e.g. Claude Code's React Ink UI).  Until then, user keyboard
+    /// input stays blocked and the hardware cursor is not shown.
     pub fn on_pty_output(&mut self) {
-        // Extract buffer before state transition (side effect)
+        if self.pty_lifecycle.is_ready() {
+            return;
+        }
+
+        // Check whether child has hidden the cursor yet.
+        let cursor_hidden = self
+            .pty_handle
+            .as_ref()
+            .map(|pty| !pty.emulator().lock().cursor().visible)
+            .unwrap_or(false);
+
+        if !cursor_hidden {
+            return;
+        }
+
+        // Extract buffer before state transition.
         let buffer = match &mut self.pty_lifecycle {
             PtyLifecycleState::Attached { buffer } => std::mem::take(buffer),
             _ => VecDeque::new(),
         };
         self.dispatch_pty(PtyIntent::GotOutput);
-        // Flush buffered input now that Claude Code is ready
+        // Flush buffered input now that child UI is active.
         if let Some(pty) = &self.pty_handle {
             for bytes in buffer {
                 let _ = pty.send_input(&bytes);
@@ -450,6 +484,123 @@ impl App {
 
     fn active_backend_index(&self) -> Option<usize> {
         self.backends.iter().position(|backend| backend.is_active)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, ConfigStore};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn make_app() -> App {
+        let config = ConfigStore::new(Config::default(), PathBuf::from("/tmp/test.toml"));
+        App::new(config)
+    }
+
+    fn press_key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        }
+    }
+
+    // -- is_pty_ready lifecycle -------------------------------------------
+
+    #[test]
+    fn not_ready_in_pending_state() {
+        let app = make_app();
+        assert!(!app.is_pty_ready());
+    }
+
+    #[test]
+    fn not_ready_in_attached_state() {
+        let mut app = make_app();
+        app.dispatch_pty(PtyIntent::Attach);
+        assert!(!app.is_pty_ready());
+    }
+
+    #[test]
+    fn ready_after_reducer_got_output() {
+        // Direct reducer dispatch always works (unit test for reducer path).
+        let mut app = make_app();
+        app.dispatch_pty(PtyIntent::Attach);
+        app.dispatch_pty(PtyIntent::GotOutput);
+        assert!(app.is_pty_ready());
+    }
+
+    // -- on_pty_output without pty_handle (no emulator to check) ----------
+
+    #[test]
+    fn on_pty_output_without_pty_handle_stays_attached() {
+        let mut app = make_app();
+        app.dispatch_pty(PtyIntent::Attach);
+        // No pty_handle → cursor_hidden = false → no transition.
+        app.on_pty_output();
+        assert!(!app.is_pty_ready());
+    }
+
+    #[test]
+    fn on_pty_output_noop_when_already_ready() {
+        let mut app = make_app();
+        app.dispatch_pty(PtyIntent::Attach);
+        app.dispatch_pty(PtyIntent::GotOutput);
+        assert!(app.is_pty_ready());
+        // Calling on_pty_output again should not panic or change state.
+        app.on_pty_output();
+        assert!(app.is_pty_ready());
+    }
+
+    // -- keyboard input blocked before ready ------------------------------
+
+    #[test]
+    fn on_key_ignored_while_pending() {
+        let mut app = make_app();
+        app.on_key(press_key(KeyCode::Char('a')));
+        assert!(matches!(app.pty_lifecycle, PtyLifecycleState::Pending { ref buffer } if buffer.is_empty()));
+    }
+
+    #[test]
+    fn on_key_ignored_while_attached() {
+        let mut app = make_app();
+        app.dispatch_pty(PtyIntent::Attach);
+        app.on_key(press_key(KeyCode::Char('x')));
+        assert!(matches!(app.pty_lifecycle, PtyLifecycleState::Attached { ref buffer } if buffer.is_empty()));
+    }
+
+    #[test]
+    fn on_paste_ignored_while_not_ready() {
+        let mut app = make_app();
+        app.dispatch_pty(PtyIntent::Attach);
+        app.on_paste("hello");
+        assert!(matches!(app.pty_lifecycle, PtyLifecycleState::Attached { ref buffer } if buffer.is_empty()));
+    }
+
+    #[test]
+    fn on_image_paste_ignored_while_not_ready() {
+        let mut app = make_app();
+        app.dispatch_pty(PtyIntent::Attach);
+        app.on_image_paste("data:image/png;base64,abc");
+        assert!(matches!(app.pty_lifecycle, PtyLifecycleState::Attached { ref buffer } if buffer.is_empty()));
+    }
+
+    // -- programmatic buffer still works ----------------------------------
+
+    #[test]
+    fn send_input_buffers_while_not_ready() {
+        let mut app = make_app();
+        app.dispatch_pty(PtyIntent::Attach);
+        app.send_input(b"--resume");
+        match &app.pty_lifecycle {
+            PtyLifecycleState::Attached { buffer } => {
+                assert_eq!(buffer.len(), 1);
+                assert_eq!(buffer[0], b"--resume");
+            }
+            other => panic!("Expected Attached, got {:?}", std::mem::discriminant(other)),
+        }
     }
 }
 
