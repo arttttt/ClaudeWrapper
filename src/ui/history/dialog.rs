@@ -4,7 +4,6 @@ use crate::ui::history::state::HistoryDialogState;
 use crate::ui::theme::{HEADER_TEXT, POPUP_BORDER};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::Frame;
 use std::time::SystemTime;
 
@@ -61,25 +60,28 @@ pub fn render_history_dialog(frame: &mut Frame, state: &HistoryDialogState) {
     });
     let rect = dialog.render(frame, frame.area());
 
-    // Scrollbar
+    // Custom scrollbar — ratatui's Scrollbar rounds start/end independently,
+    // causing ±1 thumb size jitter. Draw manually for constant thumb size.
     if can_scroll {
         let max_offset = entries.len().saturating_sub(MAX_VISIBLE_ROWS);
-        let mut scrollbar_state =
-            ScrollbarState::new(max_offset + 1).position(*scroll_offset);
-        // Limit scrollbar to content rows only (exclude borders and footer)
-        let scrollbar_area = ratatui::layout::Rect {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: (content_rows as u16).saturating_add(2), // content + borders
+        let track = content_rows;
+        let thumb_size = (track * MAX_VISIBLE_ROWS / entries.len()).max(1);
+        let thumb_start = if max_offset > 0 {
+            *scroll_offset * (track - thumb_size) / max_offset
+        } else {
+            0
         };
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .thumb_style(Style::default().fg(HEADER_TEXT))
-                .track_style(Style::default().fg(POPUP_BORDER)),
-            scrollbar_area,
-            &mut scrollbar_state,
-        );
+
+        let x = rect.x + rect.width - 1;
+        let y_base = rect.y + 1; // skip top border
+        let buf = frame.buffer_mut();
+        for i in 0..track {
+            let cell = &mut buf[(x, y_base + i as u16)];
+            if i >= thumb_start && i < thumb_start + thumb_size {
+                cell.set_char('┃');
+                cell.set_style(Style::default().fg(HEADER_TEXT));
+            }
+        }
     }
 }
 
