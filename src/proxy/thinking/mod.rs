@@ -33,7 +33,7 @@ pub struct TransformerRegistry {
 impl TransformerRegistry {
     /// Create a new registry.
     pub fn new() -> Self {
-        tracing::info!("Creating NativeTransformer (passthrough)");
+        crate::metrics::app_log("thinking", "Creating NativeTransformer (passthrough)");
         Self {
             transformer: NativeTransformer::new(),
             thinking_registry: Mutex::new(ThinkingRegistry::new()),

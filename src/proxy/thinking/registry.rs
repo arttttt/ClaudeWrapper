@@ -92,14 +92,11 @@ impl ThinkingRegistry {
             let old_session = self.current_session;
             self.current_session += 1;
             self.current_backend = new_backend.to_string();
-            tracing::info!(
-                old_backend = %if old_session == 0 { "<none>" } else { &old_backend_name },
-                new_backend = %new_backend,
-                old_session = old_session,
-                new_session = self.current_session,
-                cache_size = self.blocks.len(),
-                "Backend switch: incremented thinking session"
-            );
+            crate::metrics::app_log("thinking-registry", &format!(
+                "Backend switch: {} -> {}, session {} -> {}, cache_size={}",
+                if old_session == 0 { "<none>" } else { &old_backend_name },
+                new_backend, old_session, self.current_session, self.blocks.len()
+            ));
         }
     }
 
@@ -183,11 +180,9 @@ impl ThinkingRegistry {
                     if let Some(index) = event.data.get("index").and_then(|i| i.as_u64()) {
                         if let Some(accumulated) = accumulators.remove(&index) {
                             if !accumulated.is_empty() {
-                                tracing::debug!(
-                                    index = index,
-                                    content_len = accumulated.len(),
-                                    "SSE: registering complete thinking block"
-                                );
+                                crate::metrics::app_log("thinking-registry", &format!(
+                                    "SSE: registering complete thinking block index={} len={}", index, accumulated.len()
+                                ));
                                 self.register_block(&accumulated, session_id);
                             }
                         }
@@ -200,11 +195,9 @@ impl ThinkingRegistry {
         // Register any remaining accumulators (stream may have been truncated)
         for (index, accumulated) in accumulators {
             if !accumulated.is_empty() {
-                tracing::warn!(
-                    index = index,
-                    content_len = accumulated.len(),
-                    "SSE: registering thinking block without content_block_stop"
-                );
+                crate::metrics::app_log("thinking-registry", &format!(
+                    "SSE: registering thinking block without content_block_stop index={} len={}", index, accumulated.len()
+                ));
                 self.register_block(&accumulated, session_id);
             }
         }
@@ -218,12 +211,9 @@ impl ThinkingRegistry {
         // Check if already registered
         if let Some(existing) = self.blocks.get(&hash) {
             if existing.session == session_id {
-                tracing::trace!(
-                    hash = hash,
-                    session = session_id,
-                    already_confirmed = existing.confirmed,
-                    "Block already registered in current session, skipping"
-                );
+                crate::metrics::app_log("thinking-registry", &format!(
+                    "Block already registered in session {}, skipping (hash={}, confirmed={})", session_id, hash, existing.confirmed
+                ));
                 return;
             }
         }
@@ -237,13 +227,10 @@ impl ThinkingRegistry {
             },
         );
 
-        tracing::debug!(
-            hash = hash,
-            session = session_id,
-            content_preview = %truncate(content, 50),
-            cache_size = self.blocks.len(),
-            "Registered new thinking block"
-        );
+        crate::metrics::app_log("thinking-registry", &format!(
+            "Registered new thinking block hash={} session={} preview={} cache_size={}",
+            hash, session_id, truncate(content, 50), self.blocks.len()
+        ));
     }
 
     /// Process a request: confirm blocks, cleanup cache, filter request body.
@@ -260,12 +247,10 @@ impl ThinkingRegistry {
         // Step 1: Extract all thinking block hashes from request
         let request_hashes = self.extract_request_hashes(body);
 
-        tracing::debug!(
-            request_blocks = request_hashes.len(),
-            cache_size = self.blocks.len(),
-            current_session = self.current_session,
-            "Processing request"
-        );
+        crate::metrics::app_log("thinking-registry", &format!(
+            "Processing request: blocks={} cache_size={} session={}",
+            request_hashes.len(), self.blocks.len(), self.current_session
+        ));
 
         // Step 2: Confirm blocks that are in the request
         let confirmed_count = self.confirm_blocks(&request_hashes);
@@ -293,15 +278,11 @@ impl ThinkingRegistry {
 
         // Log summary
         if confirmed_count > 0 || cleanup_stats.total_removed() > 0 || filtered_count > 0 {
-            tracing::info!(
-                confirmed = confirmed_count,
-                cleanup_old_session = cleanup_stats.old_session,
-                cleanup_confirmed_unused = cleanup_stats.confirmed_unused,
-                cleanup_orphaned = cleanup_stats.orphaned,
-                filtered_from_request = filtered_count,
-                cache_size_after = self.blocks.len(),
-                "Request processing complete"
-            );
+            crate::metrics::app_log("thinking-registry", &format!(
+                "Request processing complete: confirmed={} cleanup(old={} unused={} orphaned={}) filtered={} cache_size={}",
+                confirmed_count, cleanup_stats.old_session, cleanup_stats.confirmed_unused,
+                cleanup_stats.orphaned, filtered_count, self.blocks.len()
+            ));
         }
 
         filtered_count
@@ -340,12 +321,10 @@ impl ThinkingRegistry {
                 if info.session == self.current_session && !info.confirmed {
                     info.confirmed = true;
                     confirmed_count += 1;
-                    tracing::debug!(
-                        hash = hash,
-                        session = info.session,
-                        age_ms = info.registered_at.elapsed().as_millis() as u64,
-                        "Confirmed thinking block"
-                    );
+                    crate::metrics::app_log("thinking-registry", &format!(
+                        "Confirmed thinking block hash={} session={} age_ms={}",
+                        hash, info.session, info.registered_at.elapsed().as_millis()
+                    ));
                 }
             }
         }
@@ -359,12 +338,10 @@ impl ThinkingRegistry {
         let mut stats = CleanupStats::default();
         self.blocks.retain(|hash, info| {
             if info.session != self.current_session {
-                tracing::debug!(
-                    hash = hash,
-                    block_session = info.session,
-                    current_session = self.current_session,
-                    "Removing block from old session"
-                );
+                crate::metrics::app_log("thinking-registry", &format!(
+                    "Removing block from old session hash={} block_session={} current_session={}",
+                    hash, info.session, self.current_session
+                ));
                 stats.old_session += 1;
                 return false;
             }
@@ -388,24 +365,20 @@ impl ThinkingRegistry {
         self.blocks.retain(|hash, info| {
             // Rule 1: Old session - always remove
             if info.session != self.current_session {
-                tracing::debug!(
-                    hash = hash,
-                    block_session = info.session,
-                    current_session = self.current_session,
-                    "Removing block from old session"
-                );
+                crate::metrics::app_log("thinking-registry", &format!(
+                    "Removing block from old session hash={} block_session={} current_session={}",
+                    hash, info.session, self.current_session
+                ));
                 stats.old_session += 1;
                 return false;
             }
 
             // Rule 2: Confirmed but not in request - remove
             if info.confirmed && !request_hashes.contains(hash) {
-                tracing::debug!(
-                    hash = hash,
-                    session = info.session,
-                    age_ms = info.registered_at.elapsed().as_millis() as u64,
-                    "Removing confirmed block no longer in request"
-                );
+                crate::metrics::app_log("thinking-registry", &format!(
+                    "Removing confirmed block no longer in request hash={} session={} age_ms={}",
+                    hash, info.session, info.registered_at.elapsed().as_millis()
+                ));
                 stats.confirmed_unused += 1;
                 return false;
             }
@@ -414,23 +387,17 @@ impl ThinkingRegistry {
             if !info.confirmed && !request_hashes.contains(hash) {
                 let age = now.duration_since(info.registered_at);
                 if age > threshold {
-                    tracing::debug!(
-                        hash = hash,
-                        session = info.session,
-                        age_ms = age.as_millis() as u64,
-                        threshold_ms = threshold.as_millis() as u64,
-                        "Removing orphaned block (unconfirmed and expired)"
-                    );
+                    crate::metrics::app_log("thinking-registry", &format!(
+                        "Removing orphaned block hash={} session={} age_ms={} threshold_ms={}",
+                        hash, info.session, age.as_millis(), threshold.as_millis()
+                    ));
                     stats.orphaned += 1;
                     return false;
                 } else {
-                    tracing::trace!(
-                        hash = hash,
-                        session = info.session,
-                        age_ms = age.as_millis() as u64,
-                        threshold_ms = threshold.as_millis() as u64,
-                        "Keeping unconfirmed block (within grace period)"
-                    );
+                    crate::metrics::app_log("thinking-registry", &format!(
+                        "Keeping unconfirmed block (within grace period) hash={} session={} age_ms={} threshold_ms={}",
+                        hash, info.session, age.as_millis(), threshold.as_millis()
+                    ));
                 }
             }
 
@@ -464,7 +431,7 @@ impl ThinkingRegistry {
 
                 // Extract content and compute hash
                 let Some(thinking) = extract_thinking_content(item) else {
-                    tracing::debug!("Removing thinking block: failed to extract content");
+                    crate::metrics::app_log("thinking-registry", "Removing thinking block: failed to extract content");
                     return false;
                 };
 
@@ -472,17 +439,15 @@ impl ThinkingRegistry {
 
                 // Check if block is in cache (implies valid session)
                 if self.blocks.contains_key(&hash) {
-                    tracing::trace!(
-                        hash = hash,
-                        "Keeping thinking block in request (found in cache)"
-                    );
+                    crate::metrics::app_log("thinking-registry", &format!(
+                        "Keeping thinking block in request (found in cache) hash={}", hash
+                    ));
                     true
                 } else {
-                    tracing::debug!(
-                        hash = hash,
-                        content_preview = %truncate(&thinking, 50),
-                        "Removing thinking block from request (not in cache)"
-                    );
+                    crate::metrics::app_log("thinking-registry", &format!(
+                        "Removing thinking block from request (not in cache) hash={} preview={}",
+                        hash, truncate(&thinking, 50)
+                    ));
                     false
                 }
             });
@@ -540,16 +505,11 @@ impl ThinkingRegistry {
     /// Log current cache state (for debugging).
     pub fn log_cache_state(&self) {
         let stats = self.cache_stats();
-        tracing::info!(
-            total = stats.total,
-            confirmed = stats.confirmed,
-            unconfirmed = stats.unconfirmed,
-            current_session_blocks = stats.current_session,
-            old_session_blocks = stats.old_session,
-            session_id = self.current_session,
-            backend = %self.current_backend,
-            "Thinking block cache state"
-        );
+        crate::metrics::app_log("thinking-registry", &format!(
+            "Cache state: total={} confirmed={} unconfirmed={} current_session_blocks={} old_session_blocks={} session={} backend={}",
+            stats.total, stats.confirmed, stats.unconfirmed, stats.current_session,
+            stats.old_session, self.current_session, self.current_backend
+        ));
     }
 }
 

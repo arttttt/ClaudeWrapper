@@ -196,11 +196,7 @@ impl BackendState {
         state.active_backend = backend_id.to_string();
 
         // Log at info level for visibility
-        tracing::info!(
-            old_backend = %old_backend,
-            new_backend = %backend_id,
-            "Backend switched"
-        );
+        crate::metrics::app_log("backend", &format!("Backend switched: {} -> {}", old_backend, backend_id));
 
         Ok(())
     }
@@ -252,11 +248,7 @@ impl BackendState {
                 new_config.defaults.active.clone()
             };
 
-            tracing::warn!(
-                old_backend = %state.active_backend,
-                new_backend = %new_active,
-                "Active backend no longer in config, switching to default"
-            );
+            crate::metrics::app_log("backend", &format!("Active backend {} no longer in config, switching to {}", state.active_backend, new_active));
 
             let entry = SwitchLogEntry {
                 timestamp: SystemTime::now(),

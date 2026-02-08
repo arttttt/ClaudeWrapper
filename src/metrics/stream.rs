@@ -154,10 +154,7 @@ where
         // Check if idle timeout has expired
         if self.deadline.as_mut().poll(cx).is_ready() {
             let duration = self.idle_timeout.as_secs();
-            tracing::warn!(
-                idle_timeout_secs = duration,
-                "SSE stream idle timeout exceeded"
-            );
+            crate::metrics::app_log("stream", &format!("SSE stream idle timeout exceeded ({}s)", duration));
             if let Some(span) = &mut self.span {
                 span.mark_timed_out();
             }
