@@ -12,7 +12,7 @@ use anyclaude::metrics::DebugLogger;
 use anyclaude::proxy::ProxyServer;
 use common::mock_backend::{MockBackend, MockResponse};
 use reqwest::Client;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,6 +37,7 @@ fn test_config(backend: Backend, bind_addr: &str) -> Config {
 
         terminal: TerminalConfig::default(),
         debug_logging: DebugLoggingConfig::default(),
+        claude_settings: HashMap::new(),
         backends: vec![backend],
     }
 }

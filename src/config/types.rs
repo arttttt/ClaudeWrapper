@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Root configuration container.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,6 +11,9 @@ pub struct Config {
     pub terminal: TerminalConfig,
     #[serde(default)]
     pub debug_logging: DebugLoggingConfig,
+    /// Claude Code settings (toggle-based, persisted as string→bool map).
+    #[serde(default)]
+    pub claude_settings: HashMap<String, bool>,
     pub backends: Vec<Backend>,
 }
 
@@ -266,6 +270,7 @@ impl Default for Config {
             proxy: ProxyConfig::default(),
             terminal: TerminalConfig::default(),
             debug_logging: DebugLoggingConfig::default(),
+            claude_settings: HashMap::new(),
             backends: vec![Backend::default()],
         }
     }

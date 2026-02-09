@@ -2,6 +2,7 @@ mod common;
 
 use anyclaude::backend::{BackendError, BackendState};
 use anyclaude::config::{Backend, Config, Defaults, ProxyConfig, TerminalConfig, DebugLoggingConfig};
+use std::collections::HashMap;
 
 fn create_test_config() -> Config {
     Config {
@@ -18,6 +19,7 @@ fn create_test_config() -> Config {
         proxy: ProxyConfig::default(),
         terminal: TerminalConfig::default(),
         debug_logging: DebugLoggingConfig::default(),
+        claude_settings: HashMap::new(),
         backends: vec![
             Backend {
                 name: "backend1".to_string(),

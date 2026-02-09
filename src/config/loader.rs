@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -168,4 +169,57 @@ impl Config {
             .iter()
             .find(|b| b.name == self.defaults.active && b.is_configured())
     }
+}
+
+/// Save claude_settings section to the config file.
+///
+/// Loads the existing Config, updates the `claude_settings` field,
+/// and writes the full config back. If the file doesn't exist,
+/// starts from defaults.
+pub fn save_claude_settings(
+    path: &Path,
+    settings: &HashMap<String, bool>,
+) -> Result<(), ConfigError> {
+    // Load existing config (or defaults if file doesn't exist)
+    let mut config = Config::load_from(path).unwrap_or_default();
+    config.claude_settings = settings.clone();
+
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| ConfigError::ReadError {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+    }
+
+    // Serialize the full config
+    let content = toml::to_string_pretty(&config).map_err(|e| ConfigError::ValidationError {
+        message: format!("Failed to serialize config: {}", e),
+    })?;
+
+    // Write with exclusive lock
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|e| ConfigError::ReadError {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+
+    fs2::FileExt::lock_exclusive(&file).map_err(|e| ConfigError::ReadError {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+
+    use std::io::Write;
+    (&file)
+        .write_all(content.as_bytes())
+        .map_err(|e| ConfigError::ReadError {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+
+    Ok(())
 }

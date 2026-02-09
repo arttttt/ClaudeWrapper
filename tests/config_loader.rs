@@ -2,6 +2,7 @@ use anyclaude::config::{
     build_auth_header, AuthType, Backend, Config, ConfigError, CredentialStatus,
     DebugLoggingConfig, Defaults, ProxyConfig, TerminalConfig,
 };
+use std::collections::HashMap;
 
 /// Test that Config::default() produces the expected values per spec.
 #[test]
@@ -52,6 +53,7 @@ fn test_validation_fails_empty_backends() {
         proxy: ProxyConfig::default(),
         terminal: TerminalConfig::default(),
         debug_logging: DebugLoggingConfig::default(),
+        claude_settings: HashMap::new(),
         backends: vec![],
     };
 
@@ -83,6 +85,7 @@ fn test_validation_fails_missing_active_backend() {
         proxy: ProxyConfig::default(),
         terminal: TerminalConfig::default(),
         debug_logging: DebugLoggingConfig::default(),
+        claude_settings: HashMap::new(),
         backends: vec![Backend::default()],
     };
 
@@ -266,6 +269,7 @@ fn test_validation_fails_unconfigured_active_backend() {
         proxy: ProxyConfig::default(),
         terminal: TerminalConfig::default(),
         debug_logging: DebugLoggingConfig::default(),
+        claude_settings: HashMap::new(),
         backends: vec![Backend {
             name: "unconfigured".to_string(),
             display_name: "Unconfigured".to_string(),
@@ -307,6 +311,7 @@ fn test_configured_backends_filters_correctly() {
         proxy: ProxyConfig::default(),
         terminal: TerminalConfig::default(),
         debug_logging: DebugLoggingConfig::default(),
+        claude_settings: HashMap::new(),
         backends: vec![
             Backend {
                 name: "configured".to_string(),

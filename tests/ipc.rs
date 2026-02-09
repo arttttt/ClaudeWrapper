@@ -6,6 +6,7 @@ use anyclaude::backend::BackendState;
 use anyclaude::config::{
     Backend, Config, DebugLoggingConfig, Defaults, ProxyConfig, TerminalConfig,
 };
+use std::collections::HashMap;
 use anyclaude::ipc::{IpcError, IpcLayer};
 use anyclaude::metrics::{DebugLogger, ObservabilityHub};
 use anyclaude::proxy::shutdown::ShutdownManager;
@@ -28,6 +29,7 @@ fn test_config() -> Config {
         proxy: ProxyConfig::default(),
         terminal: TerminalConfig::default(),
         debug_logging: DebugLoggingConfig::default(),
+        claude_settings: HashMap::new(),
         backends: vec![
             Backend {
                 name: "alpha".to_string(),
