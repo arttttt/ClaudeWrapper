@@ -49,6 +49,11 @@ impl PtyLifecycleState {
         matches!(self, Self::Pending { .. } | Self::Attached { .. })
     }
 
+    /// Check if PTY is attached (but not necessarily ready yet).
+    pub fn is_attached(&self) -> bool {
+        matches!(self, Self::Attached { .. })
+    }
+
     /// Check if PTY is in the middle of a restart cycle.
     pub fn is_restarting(&self) -> bool {
         matches!(self, Self::Restarting)

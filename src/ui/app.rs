@@ -215,6 +215,8 @@ impl App {
 
     /// Called when PTY produces output.
     ///
+    /// Returns `true` if the lifecycle just transitioned to `Ready`.
+    ///
     /// Transitions to `Ready` once the child process has both:
     /// 1. Hidden the hardware cursor (DECTCEM off) — UI framework took control
     /// 2. Rendered content (cursor moved past row 0) — first frame is drawn
@@ -222,9 +224,9 @@ impl App {
     /// React Ink's startup order is: hide cursor → setRawMode → render frame.
     /// By requiring rendered content we guarantee setRawMode has been called,
     /// so the PTY slave no longer echoes input.
-    pub fn on_pty_output(&mut self) {
+    pub fn on_pty_output(&mut self) -> bool {
         if self.pty_lifecycle.is_ready() {
-            return;
+            return false;
         }
 
         let (cursor_hidden, cursor_row) = self
@@ -238,7 +240,7 @@ impl App {
 
         // Wait until cursor is hidden AND child has rendered content.
         if !cursor_hidden || cursor_row == 0 {
-            return;
+            return false;
         }
 
         // Extract buffer before state transition.
@@ -253,6 +255,7 @@ impl App {
                 let _ = pty.send_input(&bytes);
             }
         }
+        true
     }
 
     pub fn emulator(
@@ -511,6 +514,11 @@ impl App {
     /// Current PTY generation counter.
     pub fn pty_generation(&self) -> u64 {
         self.pty_generation
+    }
+
+    /// True if at least one PTY restart has occurred during this session.
+    pub fn has_restarted(&self) -> bool {
+        self.pty_generation > 0
     }
 
     /// Increment and return the new PTY generation (called before each spawn).
