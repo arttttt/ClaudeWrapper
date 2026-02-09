@@ -1,10 +1,10 @@
 use crate::clipboard::{ClipboardContent, ClipboardHandler};
-use crate::config::{Config, ConfigStore};
+use crate::config::{save_claude_settings, Config, ConfigStore};
 use crate::error::{ErrorCategory, ErrorSeverity};
 use crate::ipc::IpcLayer;
 use crate::metrics::{init_global_logger, DebugLogger};
 use crate::proxy::ProxyServer;
-use crate::pty::PtySession;
+use crate::pty::{PtySession, PtySpawnConfig, SessionMode};
 use crate::shutdown::{ShutdownCoordinator, ShutdownPhase};
 use crate::ui::app::{App, UiCommand};
 use crate::ui::events::{mouse_scroll_direction, AppEvent, EventHandler};
@@ -127,17 +127,25 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     app.request_status_refresh();
     app.request_backends_refresh();
 
-    let command = "claude".to_string();
-    let args = claude_args;
-    // Set BASE_URL to redirect traffic through proxy
-    // Auth token is injected by proxy based on active backend (runtime)
-    // Use the actual port that was bound
-    let env = vec![
-        ("ANTHROPIC_BASE_URL".to_string(), actual_base_url),
-    ];
     let scrollback_lines = config_store.get().terminal.scrollback_lines;
-    let mut pty_session = PtySession::spawn(command, args, env, scrollback_lines, events.sender())
-        .map_err(|err| io::Error::other(err.to_string()))?;
+    let spawn_config = PtySpawnConfig::new(
+        "claude".to_string(),
+        claude_args,
+        actual_base_url,
+    );
+
+    let initial_env = app.settings_manager().to_env_vars();
+    let initial_args = app.settings_manager().to_cli_args();
+    let initial = spawn_config.build(initial_env, initial_args, SessionMode::Initial);
+    let mut pty_session = PtySession::spawn(
+        spawn_config.command().to_string(),
+        initial.args,
+        initial.env,
+        scrollback_lines,
+        events.sender(),
+        app.pty_generation(),
+    )
+    .map_err(|err| io::Error::other(err.to_string()))?;
 
     app.attach_pty(pty_session.handle());
     if let Ok((cols, rows)) = crossterm::terminal::size() {
@@ -152,6 +160,10 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
 
     // Initialize clipboard handler (may fail on headless systems)
     let mut clipboard = ClipboardHandler::new().ok();
+
+    // When true, a failed --resume restart can be retried with --session-id.
+    // Set on PtyRestart, cleared after retry or on successful attach.
+    let mut restart_can_retry = false;
 
     loop {
         terminal.draw(|frame| draw(frame, &app))?;
@@ -215,8 +227,10 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 app.on_resize(body.width.max(1), body.height.max(1));
             }
             Ok(AppEvent::PtyOutput) => {
-                // First output from Claude Code - flush buffered input
-                app.on_pty_output();
+                if app.on_pty_output() {
+                    // PTY just reached Ready — clear retry flag.
+                    restart_can_retry = false;
+                }
             }
             Ok(AppEvent::ConfigReload) => {
                 app.on_config_reload();
@@ -247,14 +261,70 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
             Ok(AppEvent::Shutdown) => {
                 app.request_quit();
             }
-            Ok(AppEvent::ProcessExit) => {
-                // Record the exit as informational (not an error if clean exit)
-                app.error_registry().record(
-                    ErrorSeverity::Info,
-                    ErrorCategory::Process,
-                    "Claude Code process exited",
+            Ok(AppEvent::ProcessExit { pty_generation }) => {
+                // Guaranteed reset: capture and clear retry flag up front.
+                let can_retry = restart_can_retry;
+                restart_can_retry = false;
+
+                if pty_generation != app.pty_generation() {
+                    // Stale ProcessExit from an old PTY instance — ignore.
+                } else if app.pty_lifecycle.is_restarting() {
+                    // Current generation but lifecycle is restarting — ignore.
+                } else if app.has_restarted() && !app.pty_lifecycle.is_ready() {
+                    // Process exited before reaching Ready after a restart.
+                    if can_retry {
+                        // --resume failed (likely no conversation yet).
+                        // Retry with --session-id to start fresh session.
+                        let env_vars = app.settings_manager().to_env_vars();
+                        let cli_args = app.settings_manager().to_cli_args();
+                        respawn_pty(
+                            &mut app,
+                            &mut pty_session,
+                            &spawn_config,
+                            env_vars,
+                            cli_args,
+                            SessionMode::Initial,
+                            scrollback_lines,
+                            &events,
+                        );
+                    } else {
+                        app.dispatch_pty(crate::ui::pty::PtyIntent::SpawnFailed);
+                        app.error_registry().record(
+                            ErrorSeverity::Critical,
+                            ErrorCategory::Process,
+                            "Claude Code exited during restart",
+                        );
+                    }
+                } else {
+                    app.error_registry().record(
+                        ErrorSeverity::Info,
+                        ErrorCategory::Process,
+                        "Claude Code process exited",
+                    );
+                    app.request_quit();
+                }
+            }
+            Ok(AppEvent::PtyRestart { env_vars, cli_args }) => {
+                // Lifecycle is already Restarting (set in apply_settings).
+                // Always try --resume first. If the session hasn't had any
+                // interaction yet, --resume will fail (no conversation to
+                // resume). The ProcessExit safety net will then retry with
+                // --session-id (SessionMode::Initial).
+                restart_can_retry = true;
+                respawn_pty(
+                    &mut app,
+                    &mut pty_session,
+                    &spawn_config,
+                    env_vars,
+                    cli_args,
+                    SessionMode::Resume,
+                    scrollback_lines,
+                    &events,
                 );
-                app.request_quit();
+                if !app.pty_lifecycle.is_attached() {
+                    // Spawn failed immediately — no point retrying.
+                    restart_can_retry = false;
+                }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -271,7 +341,8 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     // Phase 3 & 4: Terminate child and close proxy
     shutdown_coordinator.advance(ShutdownPhase::TerminatingChild);
     proxy_handle.shutdown();
-    let _ = pty_session.shutdown();
+    // pty_session.shutdown() is handled by Drop when pty_session goes out of scope.
+    drop(pty_session);
 
     // Phase 5: Cleanup
     shutdown_coordinator.advance(ShutdownPhase::Cleanup);
@@ -348,6 +419,80 @@ async fn run_ui_bridge(
                     let _ = event_tx.send(AppEvent::IpcError(err.to_string()));
                 }
             },
+            UiCommand::RestartPty {
+                env_vars,
+                cli_args,
+                settings_toml,
+            } => {
+                // Persist settings to config file before restarting.
+                // Only restart if save succeeds — otherwise user would lose settings on next launch.
+                let config_path = config_store.path().to_path_buf();
+                match save_claude_settings(&config_path, &settings_toml) {
+                    Ok(()) => {
+                        let _ = event_tx.send(AppEvent::PtyRestart { env_vars, cli_args });
+                    }
+                    Err(err) => {
+                        let _ = event_tx.send(AppEvent::IpcError(format!(
+                            "Failed to save settings: {}",
+                            err
+                        )));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Shut down the current PTY and spawn a new one with the given session mode.
+///
+/// On success, attaches the new PTY and resizes it to the current terminal.
+/// On failure, dispatches `SpawnFailed` and records an error.
+fn respawn_pty(
+    app: &mut App,
+    pty_session: &mut PtySession,
+    spawn_config: &PtySpawnConfig,
+    env_vars: Vec<(String, String)>,
+    cli_args: Vec<String>,
+    session_mode: SessionMode,
+    scrollback_lines: usize,
+    events: &EventHandler,
+) {
+    // Increment generation BEFORE shutdown so that any ProcessExit from the
+    // old reader thread (which carries the old generation) will be stale.
+    let gen = app.next_pty_generation();
+    app.detach_pty();
+    let _ = pty_session.shutdown();
+
+    let params = spawn_config.build(env_vars, cli_args, session_mode);
+    match PtySession::spawn(
+        spawn_config.command().to_string(),
+        params.args,
+        params.env,
+        scrollback_lines,
+        events.sender(),
+        gen,
+    ) {
+        Ok(new_session) => {
+            app.attach_pty(new_session.handle());
+            if let Ok((cols, rows)) = crossterm::terminal::size() {
+                let body = body_rect(Rect {
+                    x: 0,
+                    y: 0,
+                    width: cols,
+                    height: rows,
+                });
+                app.on_resize(body.width.max(1), body.height.max(1));
+            }
+            *pty_session = new_session;
+        }
+        Err(err) => {
+            app.dispatch_pty(crate::ui::pty::PtyIntent::SpawnFailed);
+            app.error_registry().record_with_details(
+                ErrorSeverity::Critical,
+                ErrorCategory::Process,
+                "Failed to restart Claude Code",
+                Some(err.to_string()),
+            );
         }
     }
 }

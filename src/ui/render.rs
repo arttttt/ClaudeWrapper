@@ -1,13 +1,16 @@
+use crate::config::SettingSection;
 use crate::error::ErrorSeverity;
 use crate::ui::app::{App, PopupKind};
+use crate::ui::components::PopupDialog;
 use crate::ui::footer::Footer;
 use crate::ui::header::Header;
 use crate::ui::history::render_history_dialog;
 use crate::ui::layout::layout_regions;
-use crate::ui::components::PopupDialog;
+use crate::ui::settings::SettingsDialogState;
 use crate::ui::terminal::TerminalBody;
 use crate::ui::theme::{
-    ACTIVE_HIGHLIGHT, HEADER_TEXT, STATUS_ERROR, STATUS_OK, STATUS_WARNING,
+    ACTIVE_HIGHLIGHT, CLAUDE_ORANGE, HEADER_SEPARATOR, HEADER_TEXT, STATUS_ERROR, STATUS_OK,
+    STATUS_WARNING,
 };
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -47,9 +50,13 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(footer_widget.widget(footer), footer);
 
     if let Some(kind) = app.popup_kind() {
-        // History dialog renders itself independently
+        // History and Settings dialogs render themselves independently
         if matches!(kind, PopupKind::History) {
             render_history_dialog(frame, app.history_dialog());
+            return;
+        }
+        if matches!(kind, PopupKind::Settings) {
+            render_settings_dialog(frame, app.settings_dialog(), body);
             return;
         }
 
@@ -281,7 +288,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
 
                 ("Select Backend", lines)
             }
-            PopupKind::History => unreachable!("handled above"),
+            PopupKind::History | PopupKind::Settings => unreachable!("handled above"),
         };
 
         let mut dialog = PopupDialog::new(title, lines);
@@ -294,11 +301,81 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                     .min_width(60)
                     .footer("Up/Down: Move  Enter: Select  Esc/Ctrl+B: Close");
             }
-            PopupKind::History => unreachable!(),
+            PopupKind::History | PopupKind::Settings => unreachable!(),
         }
         dialog.render(frame, body);
 
     }
+}
+
+fn render_settings_dialog(
+    frame: &mut Frame<'_>,
+    state: &SettingsDialogState,
+    body: ratatui::layout::Rect,
+) {
+    let SettingsDialogState::Visible {
+        fields,
+        focused,
+        dirty,
+        confirm_discard,
+    } = state
+    else {
+        return;
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut current_section: Option<SettingSection> = None;
+
+    for (idx, field) in fields.iter().enumerate() {
+        // Section header
+        if current_section != Some(field.section) {
+            if current_section.is_some() {
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from(Span::styled(
+                format!("  ── {} ──", field.section.label()),
+                Style::default().fg(CLAUDE_ORANGE),
+            )));
+            current_section = Some(field.section);
+        }
+
+        let is_focused = idx == *focused;
+        let checkbox = if field.value { "[x]" } else { "[ ]" };
+        let prefix = if is_focused { "  → " } else { "    " };
+
+        let base_style = if is_focused {
+            Style::default().bg(ACTIVE_HIGHLIGHT)
+        } else {
+            Style::default()
+        };
+
+        let check_color = if field.value { STATUS_OK } else { HEADER_TEXT };
+
+        lines.push(Line::from(vec![
+            Span::styled(prefix, base_style.fg(HEADER_TEXT)),
+            Span::styled(checkbox, base_style.fg(check_color)),
+            Span::styled(format!(" {}", field.label), base_style.fg(HEADER_TEXT)),
+        ]));
+
+        // Description as a dim line below the setting
+        lines.push(Line::from(Span::styled(
+            format!("      {}", field.description),
+            Style::default().fg(HEADER_SEPARATOR),
+        )));
+    }
+
+    let title = if *dirty { "Settings *" } else { "Settings" };
+
+    let footer = if *confirm_discard {
+        "Unsaved changes! Esc: Discard  Enter: Apply"
+    } else {
+        "Space: Toggle  Enter: Apply  Esc: Cancel"
+    };
+
+    PopupDialog::new(title, lines)
+        .min_width(50)
+        .footer(footer)
+        .render(frame, body);
 }
 
 /// Format a timestamp as a human-readable relative time.

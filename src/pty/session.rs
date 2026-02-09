@@ -22,6 +22,7 @@ impl PtySession {
         env: Vec<(String, String)>,
         scrollback_len: usize,
         notifier: Sender<AppEvent>,
+        generation: u64,
     ) -> Result<Self, Box<dyn Error>> {
         let pty_system = native_pty_system();
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -75,7 +76,7 @@ impl PtySession {
             }
             // Notify UI that the child process has exited (only if no error already sent)
             if !had_error {
-                let _ = notifier.send(AppEvent::ProcessExit);
+                let _ = notifier.send(AppEvent::ProcessExit { pty_generation: generation });
             }
         });
 
@@ -118,9 +119,19 @@ impl PtySession {
             }
         }
 
-        // Join reader thread
+        // Join reader thread with timeout to prevent hanging on shutdown
         if let Some(reader_handle) = self.reader_handle.take() {
-            let _ = reader_handle.join();
+            let join_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !reader_handle.is_finished() {
+                if std::time::Instant::now() >= join_deadline {
+                    // Reader thread is stuck — abandon it rather than block forever
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if reader_handle.is_finished() {
+                let _ = reader_handle.join();
+            }
         }
         Ok(())
     }

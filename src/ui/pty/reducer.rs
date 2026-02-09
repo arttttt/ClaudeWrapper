@@ -1,5 +1,7 @@
 //! Reducer for the PTY lifecycle.
 
+use std::collections::VecDeque;
+
 use crate::ui::mvi::Reducer;
 
 use super::intent::PtyIntent;
@@ -25,6 +27,12 @@ impl Reducer for PtyReducer {
                     // Re-attach: keep existing buffer
                     PtyLifecycleState::Attached { buffer }
                 }
+                PtyLifecycleState::Restarting => {
+                    // New PTY attached after restart — fresh buffer
+                    PtyLifecycleState::Attached {
+                        buffer: VecDeque::new(),
+                    }
+                }
                 PtyLifecycleState::Ready => PtyLifecycleState::Ready,
             },
 
@@ -42,7 +50,18 @@ impl Reducer for PtyReducer {
                     buffer.push_back(bytes);
                     PtyLifecycleState::Attached { buffer }
                 }
+                // Drop input during restart and when ready
                 PtyLifecycleState::Ready => PtyLifecycleState::Ready,
+                PtyLifecycleState::Restarting => PtyLifecycleState::Restarting,
+            },
+
+            PtyIntent::Detach => PtyLifecycleState::Restarting,
+
+            PtyIntent::SpawnFailed => match state {
+                PtyLifecycleState::Restarting => PtyLifecycleState::Pending {
+                    buffer: VecDeque::new(),
+                },
+                other => other,
             },
         }
     }
