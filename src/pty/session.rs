@@ -22,6 +22,7 @@ impl PtySession {
         env: Vec<(String, String)>,
         scrollback_len: usize,
         notifier: Sender<AppEvent>,
+        generation: u64,
     ) -> Result<Self, Box<dyn Error>> {
         let pty_system = native_pty_system();
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -75,7 +76,7 @@ impl PtySession {
             }
             // Notify UI that the child process has exited (only if no error already sent)
             if !had_error {
-                let _ = notifier.send(AppEvent::ProcessExit);
+                let _ = notifier.send(AppEvent::ProcessExit { pty_generation: generation });
             }
         });
 

@@ -64,8 +64,9 @@ pub enum AppEvent {
     PtyError(PtyError),
     /// OS signal received (SIGTERM, SIGINT)
     Shutdown,
-    /// Claude child process exited (EOF from PTY reader)
-    ProcessExit,
+    /// Claude child process exited (EOF from PTY reader).
+    /// Tagged with PTY generation to ignore stale exits from old instances.
+    ProcessExit { pty_generation: u64 },
     /// PTY restart requested (settings changed)
     PtyRestart {
         env_vars: Vec<(String, String)>,

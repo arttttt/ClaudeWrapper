@@ -17,8 +17,11 @@ pub enum PtyIntent {
         bytes: Vec<u8>,
     },
 
-    /// Detach PTY for restart (Ready → Pending with empty buffer).
+    /// Detach PTY for restart (any → Restarting).
     Detach,
+
+    /// New PTY spawn failed after detach (Restarting → Pending).
+    SpawnFailed,
 }
 
 impl Intent for PtyIntent {}

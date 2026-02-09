@@ -22,6 +22,10 @@ pub enum PtyLifecycleState {
 
     /// Claude Code ready (produced output), input goes directly to PTY.
     Ready,
+
+    /// PTY is being restarted (old PTY shut down, new one not yet attached).
+    /// Input is dropped. ProcessExit from old PTY is ignored.
+    Restarting,
 }
 
 impl Default for PtyLifecycleState {
@@ -43,5 +47,10 @@ impl PtyLifecycleState {
     /// Check if input is being buffered (Pending or Attached).
     pub fn is_buffering(&self) -> bool {
         matches!(self, Self::Pending { .. } | Self::Attached { .. })
+    }
+
+    /// Check if PTY is in the middle of a restart cycle.
+    pub fn is_restarting(&self) -> bool {
+        matches!(self, Self::Restarting)
     }
 }

@@ -80,9 +80,9 @@ pub struct App {
     settings_manager: ClaudeSettingsManager,
     /// Snapshot of values when settings dialog was opened (for dirty check).
     settings_saved_snapshot: std::collections::HashMap<crate::config::SettingId, bool>,
-    /// Flag set before sending RestartPty command, cleared after restart completes.
-    /// Prevents ProcessExit from the old PTY from quitting the app.
-    restart_pending: bool,
+    /// Monotonically increasing generation counter. Incremented on each PTY spawn.
+    /// Used to tag ProcessExit events and ignore stale exits from old instances.
+    pty_generation: u64,
 }
 
 impl App {
@@ -113,7 +113,7 @@ impl App {
             settings_dialog: SettingsDialogState::default(),
             settings_manager,
             settings_saved_snapshot,
-            restart_pending: false,
+            pty_generation: 0,
         }
     }
 
@@ -508,14 +508,15 @@ impl App {
         }
     }
 
-    /// Whether a PTY restart is pending (set before sending command, cleared after restart).
-    pub fn is_restart_pending(&self) -> bool {
-        self.restart_pending
+    /// Current PTY generation counter.
+    pub fn pty_generation(&self) -> u64 {
+        self.pty_generation
     }
 
-    /// Clear the restart_pending flag (called after restart completes or fails).
-    pub fn clear_restart_pending(&mut self) {
-        self.restart_pending = false;
+    /// Increment and return the new PTY generation (called before each spawn).
+    pub fn next_pty_generation(&mut self) -> u64 {
+        self.pty_generation += 1;
+        self.pty_generation
     }
 
     /// Apply settings from the dialog. Returns true if PTY restart was requested.
@@ -539,20 +540,21 @@ impl App {
         self.settings_saved_snapshot = self.settings_manager.snapshot_values();
         self.close_settings_dialog();
 
-        // Set restart_pending BEFORE sending the command to prevent race condition:
-        // if the old PTY crashes between send_command and the bridge processing it,
-        // ProcessExit would quit the app without this flag.
-        self.restart_pending = true;
+        // Transition to Restarting BEFORE sending the command — any ProcessExit
+        // from the old PTY that arrives between now and the actual restart will
+        // be ignored because the lifecycle state is Restarting.
+        self.dispatch_pty(PtyIntent::Detach);
 
         if !self.send_command(UiCommand::RestartPty {
             env_vars,
             cli_args,
             settings_toml,
         }) {
-            // Command failed to send, clear the flag
-            self.restart_pending = false;
+            // Command failed to send, revert to Pending
+            self.dispatch_pty(PtyIntent::SpawnFailed);
+            return false;
         }
-        self.restart_pending
+        true
     }
 
     /// Detach PTY handle and reset lifecycle for restart.

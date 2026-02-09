@@ -143,6 +143,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
         initial.env,
         scrollback_lines,
         events.sender(),
+        app.pty_generation(),
     )
     .map_err(|err| io::Error::other(err.to_string()))?;
 
@@ -254,10 +255,11 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
             Ok(AppEvent::Shutdown) => {
                 app.request_quit();
             }
-            Ok(AppEvent::ProcessExit) => {
-                if app.is_restart_pending() {
-                    // Ignore ProcessExit from old PTY during restart — flag was set
-                    // in apply_settings() before the UiCommand was sent.
+            Ok(AppEvent::ProcessExit { pty_generation }) => {
+                if pty_generation != app.pty_generation() {
+                    // Stale ProcessExit from an old PTY instance — ignore.
+                } else if app.pty_lifecycle.is_restarting() {
+                    // Current generation but lifecycle is restarting — ignore.
                 } else {
                     app.error_registry().record(
                         ErrorSeverity::Info,
@@ -268,11 +270,11 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 }
             }
             Ok(AppEvent::PtyRestart { env_vars, cli_args }) => {
-                // restart_pending was already set in App::apply_settings() before
-                // the UiCommand was sent, so ProcessExit from old PTY is safe.
+                // Lifecycle is already Restarting (set in apply_settings).
                 app.detach_pty();
                 let _ = pty_session.shutdown();
 
+                let gen = app.next_pty_generation();
                 let params = spawn_config.build(env_vars, cli_args, true);
                 match PtySession::spawn(
                     spawn_config.command().to_string(),
@@ -280,9 +282,9 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     params.env,
                     scrollback_lines,
                     events.sender(),
+                    gen,
                 ) {
                     Ok(new_session) => {
-                        app.clear_restart_pending();
                         app.attach_pty(new_session.handle());
                         if let Ok((cols, rows)) = crossterm::terminal::size() {
                             let body = body_rect(Rect {
@@ -296,7 +298,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                         pty_session = new_session;
                     }
                     Err(err) => {
-                        app.clear_restart_pending();
+                        app.dispatch_pty(crate::ui::pty::PtyIntent::SpawnFailed);
                         app.error_registry().record_with_details(
                             ErrorSeverity::Critical,
                             ErrorCategory::Process,
