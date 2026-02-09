@@ -1,4 +1,4 @@
-use crate::config::ConfigStore;
+use crate::config::{ClaudeSettingsManager, ConfigStore};
 use crate::error::ErrorRegistry;
 use crate::ipc::{BackendInfo, ProxyStatus};
 use crate::metrics::MetricsSnapshot;
@@ -6,6 +6,7 @@ use crate::pty::PtyHandle;
 use crate::ui::history::{HistoryDialogState, HistoryEntry, HistoryIntent, HistoryReducer};
 use crate::ui::mvi::Reducer;
 use crate::ui::pty::{PtyIntent, PtyLifecycleState, PtyReducer};
+use crate::ui::settings::{SettingsDialogState, SettingsIntent, SettingsReducer};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
@@ -18,6 +19,7 @@ pub enum PopupKind {
     BackendSwitch,
     Status,
     History,
+    Settings,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,6 +35,11 @@ pub enum UiCommand {
     RefreshMetrics { backend_id: Option<String> },
     RefreshBackends,
     ReloadConfig,
+    RestartPty {
+        env_vars: Vec<(String, String)>,
+        cli_args: Vec<String>,
+        settings_toml: std::collections::HashMap<String, bool>,
+    },
 }
 
 pub type UiCommandSender = mpsc::Sender<UiCommand>;
@@ -67,11 +74,23 @@ pub struct App {
     history_dialog: HistoryDialogState,
     /// Provider closure that fetches history entries from backend state.
     history_provider: Option<Arc<dyn Fn() -> Vec<HistoryEntry> + Send + Sync>>,
+    /// State of the settings dialog (MVI pattern).
+    settings_dialog: SettingsDialogState,
+    /// Claude Code settings manager (registry + current values).
+    settings_manager: ClaudeSettingsManager,
+    /// Snapshot of values when settings dialog was opened (for dirty check).
+    settings_saved_snapshot: std::collections::HashMap<crate::config::SettingId, bool>,
+    /// Flag set before sending RestartPty command, cleared after restart completes.
+    /// Prevents ProcessExit from the old PTY from quitting the app.
+    restart_pending: bool,
 }
 
 impl App {
     pub fn new(config: ConfigStore) -> Self {
         let now = Instant::now();
+        let mut settings_manager = ClaudeSettingsManager::new();
+        settings_manager.load_from_toml(&config.get().claude_settings);
+        let settings_saved_snapshot = settings_manager.snapshot_values();
         Self {
             should_quit: false,
             focus: Focus::Terminal,
@@ -91,6 +110,10 @@ impl App {
             last_backends_refresh: now,
             history_dialog: HistoryDialogState::default(),
             history_provider: None,
+            settings_dialog: SettingsDialogState::default(),
+            settings_manager,
+            settings_saved_snapshot,
+            restart_pending: false,
         }
     }
 
@@ -442,6 +465,100 @@ impl App {
     pub fn close_history_dialog(&mut self) {
         self.dispatch_history(HistoryIntent::Close);
         self.focus = Focus::Terminal;
+    }
+
+    // ========================================================================
+    // Settings dialog methods (MVI pattern)
+    // ========================================================================
+
+    /// Get the current settings dialog state.
+    pub fn settings_dialog(&self) -> &SettingsDialogState {
+        &self.settings_dialog
+    }
+
+    /// Get the settings manager.
+    pub fn settings_manager(&self) -> &ClaudeSettingsManager {
+        &self.settings_manager
+    }
+
+    /// Dispatch an intent to the settings dialog reducer.
+    pub fn dispatch_settings(&mut self, intent: SettingsIntent) {
+        dispatch_mvi!(self, settings_dialog, SettingsReducer, intent);
+    }
+
+    /// Open the settings dialog by loading snapshots from the manager.
+    pub fn open_settings_dialog(&mut self) {
+        let fields = self.settings_manager.to_snapshots();
+        self.settings_saved_snapshot = self.settings_manager.snapshot_values();
+        self.dispatch_settings(SettingsIntent::Load { fields });
+        self.focus = Focus::Popup(PopupKind::Settings);
+    }
+
+    /// Close the settings dialog without applying (unconditional).
+    pub fn close_settings_dialog(&mut self) {
+        self.dispatch_settings(SettingsIntent::Close);
+        self.focus = Focus::Terminal;
+    }
+
+    /// Request close: if dirty and not yet confirming, shows warning. Otherwise closes.
+    pub fn request_close_settings(&mut self) {
+        self.dispatch_settings(SettingsIntent::RequestClose);
+        if !self.settings_dialog.is_visible() {
+            self.focus = Focus::Terminal;
+        }
+    }
+
+    /// Whether a PTY restart is pending (set before sending command, cleared after restart).
+    pub fn is_restart_pending(&self) -> bool {
+        self.restart_pending
+    }
+
+    /// Clear the restart_pending flag (called after restart completes or fails).
+    pub fn clear_restart_pending(&mut self) {
+        self.restart_pending = false;
+    }
+
+    /// Apply settings from the dialog. Returns true if PTY restart was requested.
+    pub fn apply_settings(&mut self) -> bool {
+        let fields = match &self.settings_dialog {
+            SettingsDialogState::Visible { fields, .. } => fields.clone(),
+            _ => return false,
+        };
+
+        self.settings_manager.apply_snapshots(&fields);
+
+        if !self.settings_manager.is_dirty(&self.settings_saved_snapshot) {
+            self.close_settings_dialog();
+            return false;
+        }
+
+        let env_vars = self.settings_manager.to_env_vars();
+        let cli_args = self.settings_manager.to_cli_args();
+        let settings_toml = self.settings_manager.to_toml_map();
+
+        self.settings_saved_snapshot = self.settings_manager.snapshot_values();
+        self.close_settings_dialog();
+
+        // Set restart_pending BEFORE sending the command to prevent race condition:
+        // if the old PTY crashes between send_command and the bridge processing it,
+        // ProcessExit would quit the app without this flag.
+        self.restart_pending = true;
+
+        if !self.send_command(UiCommand::RestartPty {
+            env_vars,
+            cli_args,
+            settings_toml,
+        }) {
+            // Command failed to send, clear the flag
+            self.restart_pending = false;
+        }
+        self.restart_pending
+    }
+
+    /// Detach PTY handle and reset lifecycle for restart.
+    pub fn detach_pty(&mut self) {
+        self.pty_handle = None;
+        self.dispatch_pty(PtyIntent::Detach);
     }
 
     fn send_command(&mut self, command: UiCommand) -> bool {

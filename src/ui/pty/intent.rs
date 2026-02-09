@@ -16,6 +16,9 @@ pub enum PtyIntent {
     BufferInput {
         bytes: Vec<u8>,
     },
+
+    /// Detach PTY for restart (Ready → Pending with empty buffer).
+    Detach,
 }
 
 impl Intent for PtyIntent {}

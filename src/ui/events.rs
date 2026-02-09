@@ -66,6 +66,11 @@ pub enum AppEvent {
     Shutdown,
     /// Claude child process exited (EOF from PTY reader)
     ProcessExit,
+    /// PTY restart requested (settings changed)
+    PtyRestart {
+        env_vars: Vec<(String, String)>,
+        cli_args: Vec<String>,
+    },
 }
 
 pub struct EventHandler {

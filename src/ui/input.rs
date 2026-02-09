@@ -1,5 +1,6 @@
 use crate::ui::app::{App, PopupKind};
 use crate::ui::history::HistoryIntent;
+use crate::ui::settings::SettingsIntent;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// Action to take after processing a key event.
@@ -48,6 +49,38 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             }
             if is_ctrl_char(key, 'h') {
                 app.close_history_dialog();
+                return InputAction::None;
+            }
+            return InputAction::None;
+        }
+
+        // Handle settings dialog keys
+        if matches!(app.popup_kind(), Some(PopupKind::Settings)) {
+            match key.code {
+                KeyCode::Esc => {
+                    app.request_close_settings();
+                    return InputAction::None;
+                }
+                KeyCode::Up => {
+                    app.dispatch_settings(SettingsIntent::MoveUp);
+                    return InputAction::None;
+                }
+                KeyCode::Down => {
+                    app.dispatch_settings(SettingsIntent::MoveDown);
+                    return InputAction::None;
+                }
+                KeyCode::Char(' ') => {
+                    app.dispatch_settings(SettingsIntent::Toggle);
+                    return InputAction::None;
+                }
+                KeyCode::Enter => {
+                    app.apply_settings();
+                    return InputAction::None;
+                }
+                _ => {}
+            }
+            if is_ctrl_char(key, 'e') {
+                app.close_settings_dialog();
                 return InputAction::None;
             }
             return InputAction::None;
@@ -121,6 +154,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
     }
     if is_ctrl_char(key, 'h') {
         app.open_history_dialog();
+        return InputAction::None;
+    }
+    if is_ctrl_char(key, 'e') {
+        app.open_settings_dialog();
         return InputAction::None;
     }
 

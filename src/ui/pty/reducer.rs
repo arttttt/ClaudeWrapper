@@ -1,5 +1,7 @@
 //! Reducer for the PTY lifecycle.
 
+use std::collections::VecDeque;
+
 use crate::ui::mvi::Reducer;
 
 use super::intent::PtyIntent;
@@ -43,6 +45,10 @@ impl Reducer for PtyReducer {
                     PtyLifecycleState::Attached { buffer }
                 }
                 PtyLifecycleState::Ready => PtyLifecycleState::Ready,
+            },
+
+            PtyIntent::Detach => PtyLifecycleState::Pending {
+                buffer: VecDeque::new(),
             },
         }
     }
