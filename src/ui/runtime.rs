@@ -134,7 +134,9 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
         actual_base_url,
     );
 
-    let initial = spawn_config.build(vec![], vec![], false);
+    let initial_env = app.settings_manager().to_env_vars();
+    let initial_args = app.settings_manager().to_cli_args();
+    let initial = spawn_config.build(initial_env, initial_args, false);
     let mut pty_session = PtySession::spawn(
         spawn_config.command().to_string(),
         initial.args,
