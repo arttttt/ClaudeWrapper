@@ -6,6 +6,7 @@ use crate::pty::PtyHandle;
 use crate::ui::history::{HistoryDialogState, HistoryEntry, HistoryIntent, HistoryReducer};
 use crate::ui::mvi::Reducer;
 use crate::ui::pty::{PtyIntent, PtyLifecycleState, PtyReducer};
+use crate::ui::selection::{GridPos, TextSelection};
 use crate::ui::settings::{SettingsDialogState, SettingsIntent, SettingsReducer};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use parking_lot::Mutex;
@@ -83,6 +84,8 @@ pub struct App {
     /// Monotonically increasing generation counter. Incremented on each PTY spawn.
     /// Used to tag ProcessExit events and ignore stale exits from old instances.
     pty_generation: u64,
+    /// Current mouse text selection (None when nothing is selected).
+    selection: Option<TextSelection>,
 }
 
 impl App {
@@ -114,6 +117,7 @@ impl App {
             settings_manager,
             settings_saved_snapshot,
             pty_generation: 0,
+            selection: None,
         }
     }
 
@@ -265,6 +269,14 @@ impl App {
         self.pty_handle.as_ref().map(|pty| pty.emulator())
     }
 
+    /// Check if mouse tracking is enabled by the application.
+    pub fn mouse_tracking(&self) -> bool {
+        self.pty_handle
+            .as_ref()
+            .map(|pty| pty.emulator().lock().mouse_tracking())
+            .unwrap_or(false)
+    }
+
     /// Scroll up (view older content).
     pub fn scroll_up(&mut self, lines: usize) {
         if let Some(pty) = &self.pty_handle {
@@ -289,6 +301,48 @@ impl App {
     /// Get current scrollback offset.
     pub fn scrollback(&self) -> usize {
         self.pty_handle.as_ref().map(|pty| pty.scrollback()).unwrap_or(0)
+    }
+
+    // ========================================================================
+    // Mouse text selection
+    // ========================================================================
+
+    /// Current selection state (for rendering).
+    pub fn selection(&self) -> Option<&TextSelection> {
+        self.selection.as_ref()
+    }
+
+    /// Start a new selection at the given grid position.
+    pub fn start_selection(&mut self, pos: GridPos) {
+        self.selection = Some(TextSelection::new(pos));
+    }
+
+    /// Update the selection end position (during drag).
+    pub fn update_selection(&mut self, pos: GridPos) {
+        if let Some(sel) = &mut self.selection {
+            sel.end = pos;
+        }
+    }
+
+    /// Clear the selection.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// Finalize the selection: mark inactive, extract text from grid.
+    /// Returns the selected text, or None if no selection.
+    pub fn finish_selection(&mut self) -> Option<String> {
+        let sel = self.selection.as_mut()?;
+        sel.active = false;
+        let text = self
+            .pty_handle
+            .as_ref()
+            .map(|pty| {
+                let emu = pty.emulator();
+                let guard = emu.lock();
+                sel.extract_text(&**guard)
+            })?;
+        Some(text)
     }
 
     pub fn set_ipc_sender(&mut self, sender: UiCommandSender) {
@@ -609,34 +663,78 @@ impl App {
     }
 }
 
+// xterm modifier parameter values: 1 + bitmask (bit0=Shift, bit1=Alt, bit2=Ctrl).
+// See https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-PC-Style-Function-Keys
+const MOD_ALT: u8 = b'3';          // 1 + 2 (Alt)
+const MOD_CTRL: u8 = b'5';         // 1 + 4 (Ctrl)
+const MOD_ALT_CTRL: u8 = b'7';     // 1 + 2 + 4 (Alt+Ctrl)
+
 fn key_event_to_bytes(key: KeyEvent) -> Option<Vec<u8>> {
     if key.kind != KeyEventKind::Press {
         return None;
     }
 
+    let has_alt = key.modifiers.contains(KeyModifiers::ALT);
+    let has_control = key.modifiers.contains(KeyModifiers::CONTROL);
+
     match key.code {
         KeyCode::Char(c) => {
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if has_control {
                 let value = (c as u8).to_ascii_lowercase();
                 return Some(vec![value.saturating_sub(b'a') + 1]);
             }
+            // Fast path for ASCII characters (most common case)
+            if c.is_ascii() {
+                if has_alt {
+                    return Some(vec![0x1b, c as u8]);
+                }
+                return Some(vec![c as u8]);
+            }
+            // Slow path for multi-byte UTF-8 characters
             let mut buffer = [0u8; 4];
-            Some(c.encode_utf8(&mut buffer).as_bytes().to_vec())
+            let bytes = c.encode_utf8(&mut buffer).as_bytes();
+            if has_alt {
+                let mut result = Vec::with_capacity(1 + bytes.len());
+                result.push(0x1b);
+                result.extend_from_slice(bytes);
+                return Some(result);
+            }
+            Some(bytes.to_vec())
         }
         KeyCode::Enter => Some(vec![b'\r']),
         KeyCode::Tab => Some(vec![b'\t']),
         KeyCode::Backspace => Some(vec![0x7f]),
         KeyCode::Esc => Some(vec![0x1b]),
-        KeyCode::Up => Some(b"\x1b[A".to_vec()),
-        KeyCode::Down => Some(b"\x1b[B".to_vec()),
-        KeyCode::Right => Some(b"\x1b[C".to_vec()),
-        KeyCode::Left => Some(b"\x1b[D".to_vec()),
-        KeyCode::Home => Some(b"\x1b[H".to_vec()),
-        KeyCode::End => Some(b"\x1b[F".to_vec()),
-        KeyCode::PageUp => Some(b"\x1b[5~".to_vec()),
-        KeyCode::PageDown => Some(b"\x1b[6~".to_vec()),
-        KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
-        KeyCode::Insert => Some(b"\x1b[2~".to_vec()),
+        KeyCode::Up => modified_key(has_alt, has_control, b'1', b'A', true),
+        KeyCode::Down => modified_key(has_alt, has_control, b'1', b'B', true),
+        KeyCode::Right => modified_key(has_alt, has_control, b'1', b'C', true),
+        KeyCode::Left => modified_key(has_alt, has_control, b'1', b'D', true),
+        KeyCode::Home => modified_key(has_alt, has_control, b'1', b'H', true),
+        KeyCode::End => modified_key(has_alt, has_control, b'1', b'F', true),
+        KeyCode::PageUp => modified_key(has_alt, has_control, b'5', b'~', false),
+        KeyCode::PageDown => modified_key(has_alt, has_control, b'6', b'~', false),
+        KeyCode::Delete => modified_key(has_alt, has_control, b'3', b'~', false),
+        KeyCode::Insert => modified_key(has_alt, has_control, b'2', b'~', false),
         _ => None,
     }
+}
+
+/// Build a CSI escape sequence with optional modifier for special keys.
+///
+/// `ss3_style`: true for arrow/Home/End keys (CSI 1;mod X), false for
+/// PageUp/Delete/Insert (CSI code;mod ~).
+fn modified_key(alt: bool, ctrl: bool, code: u8, suffix: u8, ss3_style: bool) -> Option<Vec<u8>> {
+    let modifier = match (alt, ctrl) {
+        (true, true) => Some(MOD_ALT_CTRL),
+        (true, false) => Some(MOD_ALT),
+        (false, true) => Some(MOD_CTRL),
+        (false, false) => None,
+    };
+
+    Some(match modifier {
+        Some(m) if ss3_style => vec![0x1b, b'[', code, b';', m, suffix],
+        Some(m) => vec![0x1b, b'[', code, b';', m, suffix],
+        None if ss3_style => vec![0x1b, b'[', suffix],
+        None => vec![0x1b, b'[', code, suffix],
+    })
 }
