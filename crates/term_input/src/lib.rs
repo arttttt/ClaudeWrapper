@@ -1,4 +1,5 @@
 mod event;
+mod macos_modifiers;
 mod parser;
 mod reader;
 

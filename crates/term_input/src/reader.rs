@@ -1,4 +1,5 @@
-use crate::event::InputEvent;
+use crate::event::{InputEvent, KeyKind};
+use crate::macos_modifiers;
 use crate::parser::InputParser;
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
@@ -111,7 +112,25 @@ impl TtyReader {
             }
         }
 
-        Ok(self.pending.pop_front())
+        Ok(self.pending.pop_front().map(Self::enrich_with_modifiers))
+    }
+
+    /// On macOS, some terminals (Warp in alt-screen) don't send ESC prefix
+    /// for Option+key. Detect Option via CGEvent and fix up affected keys.
+    fn enrich_with_modifiers(event: InputEvent) -> InputEvent {
+        match event {
+            InputEvent::Key(ref key) if matches!(key.kind, KeyKind::Backspace) => {
+                if macos_modifiers::is_option_held() {
+                    InputEvent::Key(crate::event::KeyInput {
+                        raw: vec![0x1b, 0x7f],
+                        kind: KeyKind::Alt(Box::new(KeyKind::Backspace)),
+                    })
+                } else {
+                    event
+                }
+            }
+            _ => event,
+        }
     }
 
     /// Raw file descriptor, for external polling if needed.
