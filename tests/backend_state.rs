@@ -42,6 +42,7 @@ fn create_test_config() -> Config {
                 thinking_budget_tokens: None,
             },
         ],
+        agent_teams: None,
     }
 }
 

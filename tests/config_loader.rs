@@ -1,6 +1,6 @@
 use anyclaude::config::{
-    build_auth_header, AuthType, Backend, Config, ConfigError, CredentialStatus,
-    DebugLoggingConfig, Defaults, ProxyConfig, TerminalConfig,
+    build_auth_header, AgentTeamsConfig, AuthType, Backend, Config, ConfigError,
+    CredentialStatus, DebugLoggingConfig, Defaults, ProxyConfig, TerminalConfig,
 };
 use std::collections::HashMap;
 
@@ -55,6 +55,7 @@ fn test_validation_fails_empty_backends() {
         debug_logging: DebugLoggingConfig::default(),
         claude_settings: HashMap::new(),
         backends: vec![],
+        agent_teams: None,
     };
 
     let result = config.validate();
@@ -87,6 +88,7 @@ fn test_validation_fails_missing_active_backend() {
         debug_logging: DebugLoggingConfig::default(),
         claude_settings: HashMap::new(),
         backends: vec![Backend::default()],
+        agent_teams: None,
     };
 
     let result = config.validate();
@@ -280,6 +282,7 @@ fn test_validation_fails_unconfigured_active_backend() {
             thinking_compat: None,
             thinking_budget_tokens: None,
         }],
+        agent_teams: None,
     };
 
     let result = config.validate();
@@ -292,6 +295,82 @@ fn test_validation_fails_unconfigured_active_backend() {
         }
         _ => panic!("Expected ValidationError"),
     }
+}
+
+/// Test validation fails when agent_teams.teammate_backend references a nonexistent backend.
+#[test]
+fn test_validation_fails_invalid_teammate_backend() {
+    let config = Config {
+        defaults: Defaults::default(),
+        proxy: ProxyConfig::default(),
+        terminal: TerminalConfig::default(),
+        debug_logging: DebugLoggingConfig::default(),
+        claude_settings: HashMap::new(),
+        backends: vec![Backend::default()],
+        agent_teams: Some(AgentTeamsConfig {
+            teammate_backend: "nonexistent".to_string(),
+        }),
+    };
+
+    let result = config.validate();
+    assert!(result.is_err());
+
+    match result.unwrap_err() {
+        ConfigError::ValidationError { message } => {
+            assert!(message.contains("nonexistent"), "got: {message}");
+            assert!(message.contains("not found"), "got: {message}");
+        }
+        other => panic!("Expected ValidationError, got: {other:?}"),
+    }
+}
+
+/// Test validation fails when TOML config has agent_teams with nonexistent backend.
+/// This tests the real user flow: write TOML → parse → validate.
+#[test]
+fn test_validation_fails_invalid_teammate_backend_from_toml() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[defaults]
+active = "claude"
+timeout_seconds = 30
+
+[[backends]]
+name = "claude"
+display_name = "Claude"
+base_url = "https://api.anthropic.com"
+auth_type = "passthrough"
+
+[agent_teams]
+teammate_backend = "nonexistent"
+"#,
+    )
+    .unwrap();
+
+    let result = Config::load_from(&path);
+    assert!(result.is_err(), "should reject nonexistent teammate_backend");
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("nonexistent"), "got: {err}");
+}
+
+/// Test validation passes when agent_teams.teammate_backend references an existing backend.
+#[test]
+fn test_validation_passes_valid_teammate_backend() {
+    let config = Config {
+        defaults: Defaults::default(),
+        proxy: ProxyConfig::default(),
+        terminal: TerminalConfig::default(),
+        debug_logging: DebugLoggingConfig::default(),
+        claude_settings: HashMap::new(),
+        backends: vec![Backend::default()],
+        agent_teams: Some(AgentTeamsConfig {
+            teammate_backend: "claude".to_string(),
+        }),
+    };
+
+    assert!(config.validate().is_ok());
 }
 
 /// Test configured_backends only returns backends with valid credentials.
@@ -344,6 +423,7 @@ fn test_configured_backends_filters_correctly() {
                 thinking_budget_tokens: None,
             },
         ],
+        agent_teams: None,
     };
 
     let configured = config.configured_backends();

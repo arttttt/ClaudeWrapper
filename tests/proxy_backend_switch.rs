@@ -35,6 +35,7 @@ fn test_config_with_backends(backends: Vec<Backend>, bind_addr: &str) -> Config 
         debug_logging: DebugLoggingConfig::default(),
         claude_settings: HashMap::new(),
         backends,
+        agent_teams: None,
     }
 }
 

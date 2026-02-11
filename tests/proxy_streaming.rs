@@ -35,6 +35,7 @@ fn test_config(backend: Backend, bind_addr: &str) -> Config {
         debug_logging: DebugLoggingConfig::default(),
         claude_settings: HashMap::new(),
         backends: vec![backend],
+        agent_teams: None,
     }
 }
 
