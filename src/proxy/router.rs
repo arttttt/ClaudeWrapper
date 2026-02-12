@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::backend::BackendState;
 use crate::config::DebugLogLevel;
 use crate::proxy::error::ErrorResponse;
-use crate::metrics::{BackendOverride, DebugLogger, ObservabilityHub, RequestMeta, RoutingDecision};
+use crate::metrics::{DebugLogger, ObservabilityHub, RequestMeta, RoutingDecision};
 use crate::proxy::health::HealthHandler;
 use crate::proxy::pool::PoolConfig;
 use crate::proxy::thinking::TransformerRegistry;
@@ -110,18 +110,14 @@ async fn proxy_handler(
         });
     }
 
-    let backend_override = start
-        .backend_override
-        .as_ref()
-        .map(|override_backend| override_backend.backend.clone());
-
-    if let Some(BackendOverride { backend, reason }) = start.backend_override.take() {
-        start.span.set_backend(backend.clone());
+    let backend_override = start.backend_override.take().map(|bo| {
+        start.span.set_backend(bo.backend.clone());
         start.span.record_mut().routing_decision = Some(RoutingDecision {
-            backend,
-            reason,
+            backend: bo.backend.clone(),
+            reason: bo.reason,
         });
-    }
+        bo.backend
+    });
 
     match state
         .upstream

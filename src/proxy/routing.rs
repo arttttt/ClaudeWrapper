@@ -95,8 +95,16 @@ pub async fn routing_middleware(
 fn rewrite_uri(req: &mut Request<Body>, prefix: &str) {
     let uri = req.uri();
     let path = uri.path();
-    let new_path = path.strip_prefix(prefix).unwrap_or(path);
-    // Ensure the path starts with '/'
+    let new_path = match path.strip_prefix(prefix) {
+        Some(rest) => rest,
+        None => {
+            crate::metrics::app_log(
+                "routing",
+                &format!("BUG: rewrite_uri called but prefix {prefix:?} not found in {path:?}"),
+            );
+            return;
+        }
+    };
     let new_path = if new_path.starts_with('/') {
         new_path.to_string()
     } else {
@@ -109,8 +117,14 @@ fn rewrite_uri(req: &mut Request<Body>, prefix: &str) {
         new_path
     };
 
-    if let Ok(parsed) = new_uri.parse::<Uri>() {
-        *req.uri_mut() = parsed;
+    match new_uri.parse::<Uri>() {
+        Ok(parsed) => *req.uri_mut() = parsed,
+        Err(e) => {
+            crate::metrics::app_log(
+                "routing",
+                &format!("BUG: failed to parse rewritten URI {new_uri:?}: {e}"),
+            );
+        }
     }
 }
 

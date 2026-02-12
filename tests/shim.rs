@@ -108,6 +108,29 @@ fn tmux_shim_contains_log_and_shim_dir() {
 }
 
 #[test]
+fn tmux_shim_contains_port_and_injection_logic() {
+    let shim = match TeammateShim::create(7777) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let dir = shim_dir(&shim);
+    let script = std::fs::read_to_string(Path::new(&dir).join("tmux")).unwrap();
+
+    assert!(
+        script.contains("127.0.0.1:7777/teammate"),
+        "should contain proxy port in ANTHROPIC_BASE_URL"
+    );
+    assert!(
+        script.contains("send-keys"),
+        "should detect send-keys subcommand"
+    );
+    assert!(
+        script.contains("ANTHROPIC_BASE_URL"),
+        "should inject ANTHROPIC_BASE_URL"
+    );
+}
+
+#[test]
 fn tmux_log_path_points_to_shim_dir() {
     let shim = match TeammateShim::create(12345) {
         Ok(s) => s,

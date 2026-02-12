@@ -28,7 +28,7 @@ impl TeammateShim {
             .context("failed to create temp directory for teammate shims")?;
 
         claude::install(dir.path(), proxy_port)?;
-        tmux::install(dir.path())?;
+        tmux::install(dir.path(), proxy_port)?;
 
         let dir_path = dir.path().to_owned();
         Ok(Self { _dir: dir, dir_path })
