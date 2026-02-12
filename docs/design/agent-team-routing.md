@@ -2,7 +2,7 @@
 
 **Date**: 2026-02-11
 **Updated**: 2026-02-12
-**Status**: Implemented (Phase 1) / In Progress (tmux shim)
+**Status**: Implemented (Phase 1 + 1b + model map)
 **Parent**: [Agent Teams Integration (Ctrl+T)](agent-teams-integration.md)
 
 ## Problem
@@ -328,6 +328,33 @@ current behavior, zero overhead.
 Internally, this creates a `PathPrefixRule { prefix: "/teammate", backend }`.
 The user never sees routing rules, path prefixes, or middleware details.
 
+### Model Family Mapping
+
+Claude Code passes `--model claude-opus-4-6` to teammates. Non-Anthropic
+backends don't recognize this model ID. The proxy rewrites the `model` field
+in request bodies using per-backend family mapping:
+
+```toml
+[[backends]]
+name = "glm"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+auth_type = "bearer"
+api_key = "..."
+model_opus = "glm-5"
+model_sonnet = "glm-5"
+model_haiku = "glm-4.5-air"
+```
+
+Fields are optional — if not set, the model passes through unchanged.
+Matching uses substring search on family keywords (`opus`, `sonnet`, `haiku`),
+so `claude-opus-4-6`, `claude-opus-4-5-20251101`, and
+`us.anthropic.claude-opus-4-5-v1:0` all match `model_opus`.
+
+This works because Claude Code determines model capabilities (max tokens,
+thinking support, cutoff date) **client-side** via substring matching on the
+model ID **before** sending the request. The proxy rewrites only the outgoing
+request body — Claude Code never sees the substitution.
+
 ---
 
 ## Component 2: PATH Shims
@@ -342,7 +369,7 @@ Two shims are placed in a temp directory prepended to PATH:
 | Shim | Purpose | Status |
 |------|---------|--------|
 | `claude` | Defense-in-depth: rewrites `ANTHROPIC_BASE_URL` if `CLAUDE_CODE_AGENT_TYPE` is set | Implemented (but bypassed — see below) |
-| `tmux` | Intercepts `send-keys` commands, injects `ANTHROPIC_BASE_URL` for teammates | Logging phase |
+| `tmux` | Intercepts `send-keys` commands, injects `ANTHROPIC_BASE_URL` for teammates | Implemented (Phase 1b) |
 
 ### Why claude shim alone doesn't work
 
@@ -504,67 +531,22 @@ PATH shims for claude + tmux. `--teammate-mode tmux` injection.
    → teammate requests go to `/teammate/v1/messages`
    → `PathPrefixRule` strips prefix → routes to teammate backend
 
-### Phase 1b: Smart tmux Shim 🔧 NEXT
+### Phase 1b: Smart tmux Shim ✅ DONE
 
 **Goal**: tmux shim parses `send-keys` and injects `ANTHROPIC_BASE_URL`
 so teammate traffic goes through the `/teammate` routing path.
 
-**Input data** (from tmux shim log):
-```
-tmux -L claude-swarm-26283 send-keys -t %0 \
-  cd /path && CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 \
-  /abs/path/claude --agent-flags Enter
-```
+**Implementation**: the shim handles two cases:
+- **Case A** (standalone arg): claude path as separate arg (`/abs/path/claude`)
+- **Case B** (embedded in string): entire command as one arg — the confirmed
+  format used by Claude Code. Uses `sed -E` to inject before the claude path.
 
-**Approach**: in the bash shim, scan args for `send-keys` subcommand.
-If found, scan remaining args for a token that looks like an absolute
-path to claude (contains `/claude`). Insert
-`ANTHROPIC_BASE_URL=http://127.0.0.1:__PORT__/teammate` before it.
-All other tmux commands — forward unchanged.
+Both cases inject `ANTHROPIC_BASE_URL=http://127.0.0.1:PORT/teammate` before
+the claude binary path. If no claude invocation is found, the command is
+forwarded unchanged (graceful degradation).
 
-```bash
-#!/bin/bash
-SHIM_DIR="$(cd "$(dirname "$0")" && pwd)"
-LOG="$SHIM_DIR/tmux_shim.log"
-REAL_TMUX="$(find_real_tmux)"  # same as current shim
-
-# Detect send-keys with claude invocation, inject ANTHROPIC_BASE_URL.
-inject_args() {
-  local out=()
-  local found_send_keys=false
-  local injected=false
-  for arg in "$@"; do
-    if [ "$arg" = "send-keys" ]; then
-      found_send_keys=true
-    fi
-    # Inject before the absolute claude path
-    if $found_send_keys && ! $injected && [[ "$arg" == /* ]] && [[ "$arg" == *claude* ]]; then
-      out+=("ANTHROPIC_BASE_URL=http://127.0.0.1:__PORT__/teammate")
-      injected=true
-    fi
-    out+=("$arg")
-  done
-  echo "${out[@]}"
-}
-
-# Log and execute
-echo "[$(date '+%H:%M:%S.%N')] tmux $*" >> "$LOG"
-
-MODIFIED_ARGS="$(inject_args "$@")"
-exec "$REAL_TMUX" $MODIFIED_ARGS
-```
-
-**Risks**:
-- Argument parsing in bash is fragile with spaces/special chars in paths.
-  Mitigation: Claude Code paths are controlled (no spaces in homebrew paths).
-- Claude Code might change `send-keys` format in future versions.
-  Mitigation: if no claude path found, forward unchanged (graceful degradation).
-
-**Verification**:
-1. Launch with `[agent_teams]` configured
-2. Check debug log for `[ROUTING] Routed POST /teammate/v1/messages -> backend=X`
-3. Check tmux_shim.log for `ANTHROPIC_BASE_URL` injection
-4. Check Ctrl+S status popup — should show requests on both backends
+**Verified end-to-end**: tmux shim log shows `INJECT` lines, proxy debug log
+shows `Routed POST /teammate/v1/messages -> backend=glm`.
 
 ### Phase 1c: Synthetic tmux (Future)
 
@@ -698,10 +680,13 @@ is set, just `/teammate`. If `overrides` exist, encode the agent name too.
    AnyClaude already handles this via `thinking_compat` backend config.
    Should work out of the box if teammate backend has `thinking_compat = true`.
 
-2. **Model override in teammate prompts.**
-   Claude Code passes `--model claude-opus-4-6` to teammates. If the teammate
-   backend doesn't support that model, the request may fail.
-   **Mitigation**: A future routing rule could rewrite the model field.
+2. **Model override in teammate prompts.** ✅ **Solved.**
+   Claude Code passes `--model claude-opus-4-6` to teammates. The proxy now
+   rewrites the `model` field in request bodies via per-backend family mapping
+   (`model_opus`, `model_sonnet`, `model_haiku` fields on `[[backends]]`).
+   Substring matching on family keywords (opus/sonnet/haiku) handles all
+   model ID variants. Claude Code capability detection stays intact because
+   it runs client-side before the request reaches the proxy.
 
 3. **Synthetic tmux (no real tmux dependency).**
    The tmux shim could handle the full teammate lifecycle without real tmux:
