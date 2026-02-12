@@ -200,6 +200,19 @@ impl UpstreamClient {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
+                // Rewrite model field via family-based mapping
+                let mut model_rewritten = false;
+                if let Some(model_val) = json_body.get("model").and_then(|m| m.as_str()) {
+                    if let Some(new_model) = backend.resolve_model(model_val) {
+                        crate::metrics::app_log(
+                            "model_map",
+                            &format!("Rewrote model '{}' → '{}'", model_val, new_model),
+                        );
+                        json_body["model"] = serde_json::json!(new_model);
+                        model_rewritten = true;
+                    }
+                }
+
                 // Convert adaptive thinking to standard format for non-Anthropic backends
                 let mut thinking_converted = false;
                 if needs_thinking_compat {
@@ -270,7 +283,7 @@ impl UpstreamClient {
                 }
 
                 // Re-serialize body if any transformation occurred
-                if thinking_converted || filtered > 0 || transformer_changed {
+                if model_rewritten || thinking_converted || filtered > 0 || transformer_changed {
                     if thinking_converted {
                         let thinking_json = json_body.get("thinking")
                             .map(|t| t.to_string())

@@ -228,6 +228,15 @@ pub struct Backend {
     /// Default: 10000.
     #[serde(default)]
     pub thinking_budget_tokens: Option<u32>,
+    /// Model name to use for opus-family requests on this backend.
+    #[serde(default)]
+    pub model_opus: Option<String>,
+    /// Model name to use for sonnet-family requests on this backend.
+    #[serde(default)]
+    pub model_sonnet: Option<String>,
+    /// Model name to use for haiku-family requests on this backend.
+    #[serde(default)]
+    pub model_haiku: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +263,9 @@ impl Default for Backend {
             pricing: None,
             thinking_compat: None,
             thinking_budget_tokens: None,
+            model_opus: None,
+            model_sonnet: None,
+            model_haiku: None,
         }
     }
 }
