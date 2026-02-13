@@ -346,48 +346,6 @@ impl Default for DebugLogRotation {
 
 
 
-impl DebugLoggingConfig {
-    pub fn apply_env_overrides(&mut self) {
-        if let Ok(value) = std::env::var("CLAUDE_WRAPPER_DEBUG_LEVEL") {
-            if let Some(level) = DebugLogLevel::parse(&value) {
-                self.level = level;
-            }
-        }
-
-        if let Ok(value) = std::env::var("CLAUDE_WRAPPER_DEBUG_FORMAT") {
-            if let Some(format) = DebugLogFormat::parse(&value) {
-                self.format = format;
-            }
-        }
-
-        if let Ok(value) = std::env::var("CLAUDE_WRAPPER_DEBUG_DEST") {
-            if let Some(dest) = DebugLogDestination::parse(&value) {
-                self.destination = dest;
-            }
-        }
-
-        if let Ok(value) = std::env::var("CLAUDE_WRAPPER_DEBUG_FILE") {
-            if !value.trim().is_empty() {
-                self.file_path = value;
-            }
-        }
-
-        if let Ok(value) = std::env::var("CLAUDE_WRAPPER_DEBUG_BODY_PREVIEW_BYTES") {
-            if let Ok(parsed) = value.parse::<usize>() {
-                self.body_preview_bytes = parsed;
-            }
-        }
-
-        if let Ok(value) = std::env::var("CLAUDE_WRAPPER_DEBUG_FULL_BODY") {
-            self.full_body = value == "1" || value.to_lowercase() == "true";
-        }
-
-        if let Ok(value) = std::env::var("CLAUDE_WRAPPER_DEBUG_PRETTY_PRINT") {
-            self.pretty_print = value == "1" || value.to_lowercase() == "true";
-        }
-    }
-}
-
 impl DebugLogLevel {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_lowercase().as_str() {

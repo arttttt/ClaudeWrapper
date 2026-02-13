@@ -56,8 +56,7 @@ impl Config {
     /// - Returns an error if reading, parsing, or validation fails.
     pub fn load_from(path: &Path) -> Result<Self, ConfigError> {
         if !path.exists() {
-            let mut config = Config::default();
-            config.debug_logging.apply_env_overrides();
+            let config = Config::default();
             return Ok(config);
         }
 
@@ -84,12 +83,11 @@ impl Config {
 
         // Lock is automatically released when file is dropped
 
-        let mut config: Config = toml::from_str(&content).map_err(|e| ConfigError::ParseError {
+        let config: Config = toml::from_str(&content).map_err(|e| ConfigError::ParseError {
             path: path.to_path_buf(),
             source: e,
         })?;
 
-        config.debug_logging.apply_env_overrides();
         config.validate()?;
         Ok(config)
     }
