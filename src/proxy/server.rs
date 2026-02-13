@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 
 use crate::backend::BackendState;
-use crate::config::ConfigStore;
+use crate::config::{AgentTeamsConfig, ConfigStore};
 use crate::metrics::{DebugLogger, ObservabilityHub};
 use crate::proxy::connection::ConnectionCounter;
 use crate::proxy::pool::PoolConfig;
@@ -21,7 +21,7 @@ pub struct ProxyServer {
     /// Populated by try_bind(), consumed by run().
     listener: Option<TcpListener>,
     router: RouterEngine,
-    routing_rules: Vec<Box<dyn crate::proxy::routing::RoutingRule>>,
+    agent_teams: Option<AgentTeamsConfig>,
     shutdown: Arc<ShutdownManager>,
     backend_state: BackendState,
     observability: ObservabilityHub,
@@ -49,12 +49,11 @@ impl ProxyServer {
             debug_logger.clone(),
             transformer_registry.clone(),
         );
-        let routing_rules = crate::proxy::routing::build_rules(&cfg.agent_teams);
         Ok(Self {
             addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             listener: None,
             router,
-            routing_rules,
+            agent_teams: cfg.agent_teams.clone(),
             shutdown: Arc::new(ShutdownManager::new()),
             backend_state,
             observability,
@@ -146,7 +145,7 @@ impl ProxyServer {
 
         crate::metrics::app_log("proxy", &format!("Starting proxy server on {}", self.addr));
 
-        let app = build_router(self.router.clone(), self.routing_rules);
+        let app = build_router(self.router.clone(), &self.agent_teams);
         let make_service = app.into_make_service();
         let make_service = ConnectionCounter::new(make_service, self.shutdown.clone());
 
