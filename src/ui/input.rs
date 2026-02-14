@@ -8,8 +8,6 @@ use term_input::{Direction, KeyInput, KeyKind};
 pub enum InputAction {
     /// No further action needed (handled internally).
     None,
-    /// Request image paste from clipboard.
-    ImagePaste,
     /// Forward raw bytes to PTY.
     Forward,
 }
@@ -23,7 +21,10 @@ pub fn classify_key(app: &mut App, key: &KeyInput) -> InputAction {
             return InputAction::None;
         }
         KeyKind::Control('v') => {
-            return InputAction::ImagePaste;
+            // Forward to CC — it handles clipboard images natively via
+            // osascript on macOS (reads «class PNGf» / «class furl»
+            // from the pasteboard).
+            return InputAction::Forward;
         }
         _ => {}
     }
