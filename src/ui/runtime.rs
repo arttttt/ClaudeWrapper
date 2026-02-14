@@ -1,4 +1,4 @@
-use crate::clipboard::{ClipboardContent, ClipboardHandler};
+use crate::clipboard::ClipboardHandler;
 use crate::config::{save_claude_settings, Config, ConfigStore};
 use crate::error::{ErrorCategory, ErrorSeverity};
 use crate::ipc::IpcLayer;
@@ -229,9 +229,6 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     InputAction::Forward => {
                         app.send_input(&key.raw);
                     }
-                    InputAction::ImagePaste => {
-                        handle_image_paste(&mut app, &mut clipboard);
-                    }
                     InputAction::None => {}
                 }
             }
@@ -295,13 +292,15 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
             }
             Ok(AppEvent::Paste(text)) => {
                 if text.trim().is_empty() {
-                    // Empty paste likely means image in clipboard - check for image
-                    handle_image_paste(&mut app, &mut clipboard);
+                    // Empty paste = image in clipboard (terminal couldn't paste
+                    // text, so it sent empty brackets). Forward Ctrl+V (0x16)
+                    // to CC so it can read the clipboard image directly via
+                    // its native osascript mechanism.
+                    app.send_input(&[0x16]);
                 } else {
                     app.on_paste(&text);
                 }
             }
-            Ok(AppEvent::ImagePaste(path)) => app.on_image_paste(&path),
             Ok(AppEvent::Tick) => {
                 app.on_tick();
                 if app.should_refresh_status(STATUS_REFRESH_INTERVAL) {
@@ -620,32 +619,6 @@ fn screen_to_grid(col: u16, row: u16) -> Option<GridPos> {
         row: row - body.y,
         col: col - body.x,
     })
-}
-
-/// Handle image paste request by checking clipboard for image content.
-fn handle_image_paste(app: &mut App, clipboard: &mut Option<ClipboardHandler>) {
-    let Some(clip) = clipboard else {
-        return;
-    };
-
-    match clip.get_content() {
-        ClipboardContent::Image(path) => {
-            app.on_image_paste(&path);
-        }
-        ClipboardContent::Text(text) => {
-            // Fall back to text paste if no image
-            app.on_paste(&text);
-        }
-        ClipboardContent::Empty => {}
-    }
-
-    if let Some(err) = clip.take_error() {
-        app.error_registry().record(
-            ErrorSeverity::Warning,
-            ErrorCategory::Process,
-            &err,
-        );
-    }
 }
 
 /// Wait for OS shutdown signals (SIGTERM, SIGINT).
