@@ -33,8 +33,9 @@ impl TeammateShim {
         Ok(Self { _dir: dir, dir_path })
     }
 
-    /// Returns a `("PATH", "shim_dir:$PATH")` tuple for use with
-    /// `PtySpawnConfig::build(extra_env)`.
+    /// Returns a `("PATH", "shim_dir:$PATH")` tuple for injection into
+    /// the spawned process environment via `build_spawn_params()` or
+    /// `build_restart_params()`.
     pub fn path_env(&self) -> (String, String) {
         let current = std::env::var("PATH").unwrap_or_default();
         (
