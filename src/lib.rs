@@ -1,3 +1,4 @@
+pub mod args;
 pub mod backend;
 pub mod clipboard;
 pub mod config;
