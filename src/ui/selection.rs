@@ -56,6 +56,51 @@ impl TextSelection {
         true // middle rows are fully selected
     }
 
+    /// Create a selection spanning the word at `pos`.
+    ///
+    /// A "word" is a contiguous run of non-whitespace characters on the same row.
+    /// Returns `None` if the cell at `pos` is whitespace or out of bounds.
+    pub fn select_word(emu: &dyn TerminalEmulator, pos: GridPos) -> Option<Self> {
+        let cell = emu.cell(pos.row, pos.col)?;
+        if !cell.has_contents || cell.symbol.trim().is_empty() {
+            return None;
+        }
+
+        // Scan left to find word start
+        let mut left = pos.col;
+        while left > 0 {
+            let Some(c) = emu.cell(pos.row, left - 1) else {
+                break;
+            };
+            if !c.has_contents || c.symbol.trim().is_empty() || c.is_wide_continuation {
+                break;
+            }
+            left -= 1;
+        }
+
+        // Scan right to find word end
+        let mut right = pos.col;
+        loop {
+            let Some(c) = emu.cell(pos.row, right + 1) else {
+                break;
+            };
+            if !c.has_contents || c.symbol.trim().is_empty() {
+                break;
+            }
+            if c.is_wide_continuation {
+                right += 1;
+                continue;
+            }
+            right += 1;
+        }
+
+        Some(Self {
+            start: GridPos { row: pos.row, col: left },
+            end: GridPos { row: pos.row, col: right },
+            active: false,
+        })
+    }
+
     /// Extract selected text from the emulator grid.
     ///
     /// Iterates row-by-row, collects cell symbols, trims trailing whitespace

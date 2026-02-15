@@ -20,7 +20,7 @@ use term_input::MouseEvent;
 use ratatui::layout::Rect;
 use std::io;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
 
@@ -206,6 +206,9 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     // Deferred mouse-down anchor: start_selection only on first Drag,
     // not on Down, to avoid selecting a single character on plain click.
     let mut mouse_down_pos: Option<GridPos> = None;
+    // Double-click detection: track last click time and position.
+    let mut last_click: Option<(Instant, GridPos)> = None;
+    const DOUBLE_CLICK_MS: u128 = 400;
 
     loop {
         terminal.draw(|frame| draw(frame, &app))?;
@@ -244,8 +247,26 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 else {
                     match mouse {
                         MouseEvent::Down { button: term_input::MouseButton::Left, .. } => {
-                            app.clear_selection();
-                            mouse_down_pos = screen_to_grid(col, row);
+                            let grid_pos = screen_to_grid(col, row);
+                            let is_double = grid_pos.is_some_and(|pos| {
+                                last_click.is_some_and(|(t, p)| {
+                                    p == pos && t.elapsed().as_millis() < DOUBLE_CLICK_MS
+                                })
+                            });
+                            if is_double {
+                                let pos = grid_pos.unwrap();
+                                last_click = None;
+                                mouse_down_pos = None;
+                                if let Some(text) = app.select_word_at(pos) {
+                                    if let Some(clip) = &mut clipboard {
+                                        let _ = clip.set_text(&text);
+                                    }
+                                }
+                            } else {
+                                app.clear_selection();
+                                mouse_down_pos = grid_pos;
+                                last_click = grid_pos.map(|p| (Instant::now(), p));
+                            }
                         }
                         MouseEvent::Drag { button: term_input::MouseButton::Left, .. } => {
                             if let Some(pos) = screen_to_grid(col, row) {
