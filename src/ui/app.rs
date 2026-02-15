@@ -316,6 +316,18 @@ impl App {
         self.selection = None;
     }
 
+    /// Select the word at the given grid position (for double-click).
+    /// Sets selection and returns the selected text, or None if whitespace/empty.
+    pub fn select_word_at(&mut self, pos: GridPos) -> Option<String> {
+        let pty = self.pty_handle.as_ref()?;
+        let emu = pty.emulator();
+        let guard = emu.lock();
+        let sel = TextSelection::select_word(&**guard, pos)?;
+        let text = sel.extract_text(&**guard);
+        self.selection = Some(sel);
+        if text.is_empty() { None } else { Some(text) }
+    }
+
     /// Finalize the selection: mark inactive, extract text from grid.
     /// Returns the selected text, or None if no selection.
     pub fn finish_selection(&mut self) -> Option<String> {
