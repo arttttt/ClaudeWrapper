@@ -218,6 +218,8 @@ model_haiku = "provider-small"    # claude-haiku-4-5 -> provider-small
 
 Only configured families are remapped. Omitted families pass through unchanged.
 
+Responses are automatically reverse-mapped: if the backend returns its own model name (e.g. `provider-large`), the proxy rewrites it back to the original name (e.g. `claude-opus-4-6`) so Claude Code sees a consistent model identity.
+
 ### Agent Teams (Experimental)
 
 Route Claude Code's teammate agents to a separate backend. Useful when you want the main agent on one provider and teammates on a cheaper/different one.
@@ -306,7 +308,7 @@ Requires [just](https://github.com/casey/just) task runner.
 | Command | Description |
 |---------|-------------|
 | `just check` | Run lints, clippy, and tests |
-| `just release 0.3.0` | Bump version, update CHANGELOG, commit, tag |
+| `just release 0.4.0` | Bump version, update CHANGELOG, commit, tag |
 | `just changelog` | Regenerate CHANGELOG.md |
 
 ## License
