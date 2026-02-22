@@ -1,6 +1,6 @@
 use crate::args::{build_restart_params, build_spawn_params, SpawnParams};
 use crate::clipboard::ClipboardHandler;
-use crate::config::{save_claude_settings, Config, ConfigStore};
+use crate::config::{save_claude_settings, ClaudeSettingsManager, Config, ConfigStore};
 use crate::error::{ErrorCategory, ErrorSeverity};
 use crate::ipc::IpcLayer;
 use crate::metrics::{init_global_logger, DebugLogger};
@@ -56,7 +56,45 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     // Config file watching removed to avoid race conditions with CLI overrides.
     // Config is loaded once at startup and remains static for the session.
 
-    let debug_logger = Arc::new(DebugLogger::new(config_store.get().debug_logging.clone()));
+    // Store base args for restart scenarios
+    let base_raw_args = claude_args.clone();
+    let base_proxy_url = config_store.get().proxy.base_url.clone();
+
+    // Build spawn parameters FIRST to get session_id before creating logger.
+    // This prevents a race condition where logs are written to the wrong file.
+    let scrollback_lines = config_store.get().terminal.scrollback_lines;
+    let mut settings_manager = ClaudeSettingsManager::new();
+    settings_manager.load_from_toml(&config_store.get().claude_settings);
+    let spawn = build_spawn_params(
+        &base_raw_args,
+        &base_proxy_url,
+        &settings_manager,
+        None, // shim not needed here — we only use session_id from the result
+    );
+    let current_session_id = spawn.session_id.clone();
+
+    // Build per-session debug config with session_id in the file path.
+    let debug_config = {
+        let mut config = config_store.get().debug_logging.clone();
+        if !current_session_id.is_empty() {
+            let original_path = &config.file_path;
+            // Transform path like "debug.log" -> "debug.{session_id}.log"
+            if let Some(dot_pos) = original_path.rfind('.') {
+                config.file_path = format!(
+                    "{}.{}.{}",
+                    &original_path[..dot_pos],
+                    &current_session_id,
+                    &original_path[dot_pos + 1..]
+                );
+            } else {
+                // No extension found, append session_id
+                config.file_path = format!("{}.{}", original_path, current_session_id);
+            }
+        }
+        config
+    };
+
+    let debug_logger = Arc::new(DebugLogger::new(debug_config));
     init_global_logger(debug_logger.clone());
 
     let (ui_command_tx, ui_command_rx) = mpsc::channel(UI_COMMAND_BUFFER);
@@ -65,7 +103,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
 
     let mut proxy_server = ProxyServer::new(config_store.clone(), debug_logger.clone())
         .map_err(|err| io::Error::other(err.to_string()))?;
-    
+
     // Try to bind and get the actual port, updating the base URL
     let (actual_addr, actual_base_url) = async_runtime.block_on(async {
         proxy_server.try_bind(&config_store).await
@@ -123,10 +161,12 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
             crate::metrics::app_log_error("runtime", "Proxy server exited", &err.to_string());
         }
     });
+    // Clone debug_logger for the IPC server spawn.
+    let ipc_debug_logger = debug_logger.clone();
     async_runtime.spawn(ipc_server.run(
         backend_state.clone(),
         observability,
-        debug_logger,
+        ipc_debug_logger,
         shutdown,
         started_at,
         transformer_registry,
@@ -153,22 +193,8 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     app.request_status_refresh();
     app.request_backends_refresh();
 
-    let scrollback_lines = config_store.get().terminal.scrollback_lines;
-
-    // Store base args for restart scenarios
-    let base_raw_args = claude_args;
+    // Store base args for restart scenarios (using actual_base_url now that proxy is bound)
     let base_proxy_url = actual_base_url;
-
-    // Build spawn parameters via the args pipeline
-    let spawn = build_spawn_params(
-        &base_raw_args,
-        &base_proxy_url,
-        app.settings_manager(),
-        _teammate_shim.as_ref(),
-    );
-
-    // Session ID for --resume on restart (Ctrl+R).
-    let current_session_id = spawn.session_id.clone();
 
     for warning in &spawn.warnings {
         app.error_registry().record(

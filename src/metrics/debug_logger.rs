@@ -1,10 +1,10 @@
 use std::cmp::min;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::RwLock;
 use serde_json::json;
@@ -520,7 +520,15 @@ impl RotatingFile {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let file = File::create(&path).unwrap_or_else(|_| File::create("/dev/null").unwrap());
+        let file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)
+            .unwrap_or_else(|_| File::create("/dev/null").unwrap());
+
+        // Cleanup old session log files in the background (files older than 7 days)
+        cleanup_old_session_logs(&path);
+
         let current_size = file.metadata().map(|m| m.len()).unwrap_or(0);
         Self {
             path,
@@ -629,4 +637,74 @@ fn current_day() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() / 86_400)
         .unwrap_or(0)
+}
+
+/// Cleanup old per-session log files that haven't been modified in the last 7 days.
+/// Runs synchronously at startup and silently ignores errors.
+pub fn cleanup_old_session_logs(current_log_path: &Path) {
+    let dir = match current_log_path.parent() {
+        Some(dir) => dir,
+        None => return,
+    };
+
+    // Get the base name pattern (e.g., "debug" from "debug.abc123.log")
+    let base_name: String = current_log_path
+        .file_name()
+        .map(|name| {
+            let name_str = name.to_string_lossy();
+            // Extract "debug" from "debug.{session_id}.log"
+            name_str.split('.').next().unwrap_or("debug").to_string()
+        })
+        .unwrap_or_else(|| "debug".to_string());
+
+    // Calculate cutoff time (7 days ago)
+    let cutoff = SystemTime::now() - Duration::from_secs(7 * 24 * 60 * 60);
+
+    let entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(dir) {
+        Ok(read_dir) => read_dir.filter_map(|entry| entry.ok()).collect(),
+        Err(_) => return,
+    };
+
+    for entry in entries {
+        let path = entry.path();
+        let file_name = match path.file_name() {
+            Some(name) => name.to_string_lossy(),
+            None => continue,
+        };
+
+        // Skip if it's the current log file
+        if path == current_log_path {
+            continue;
+        }
+
+        // Match files like "debug.*.log" or "debug.*.log.*" (rotated)
+        let name = file_name.as_ref();
+        if !name.starts_with(&base_name) {
+            continue;
+        }
+
+        // Check if it looks like a per-session log file:
+        // - debug.{session_id}.log
+        // - debug.{session_id}.log.{timestamp}
+        let parts: Vec<&str> = name.split('.').collect();
+        let is_session_log = match parts.as_slice() {
+            [base, _, "log"] if *base == base_name => true,
+            [base, _, "log", _] if *base == base_name => true,
+            _ => false,
+        };
+
+        if !is_session_log {
+            continue;
+        }
+
+        // Check modification time
+        let modified = match entry.metadata().and_then(|m| m.modified()) {
+            Ok(time) => time,
+            Err(_) => continue,
+        };
+
+        if modified < cutoff {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
