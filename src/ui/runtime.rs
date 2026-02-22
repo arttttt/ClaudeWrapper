@@ -558,6 +558,12 @@ async fn run_ui_bridge(
                     }
                 }
             }
+            UiCommand::RestartClaude => {
+                let _ = event_tx.send(AppEvent::PtyRestart {
+                    env_vars: vec![],
+                    cli_args: vec![],
+                });
+            }
         }
     }
 }

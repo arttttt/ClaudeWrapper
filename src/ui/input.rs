@@ -59,6 +59,10 @@ pub fn classify_key(app: &mut App, key: &KeyInput) -> InputAction {
             app.open_settings_dialog();
             InputAction::None
         }
+        KeyKind::Control('r') => {
+            app.request_restart_claude();
+            InputAction::None
+        }
         _ => InputAction::Forward,
     }
 }
