@@ -167,6 +167,9 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
         _teammate_shim.as_ref(),
     );
 
+    // Session ID for --resume on restart (Ctrl+R).
+    let current_session_id = spawn.session_id.clone();
+
     for warning in &spawn.warnings {
         app.error_registry().record(
             ErrorSeverity::Warning,
@@ -418,6 +421,40 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     app.request_quit();
                 }
             }
+            Ok(AppEvent::RestartClaude) => {
+                // Ctrl+R: resume current session with --resume.
+                // Lifecycle is already Restarting (set in request_restart_claude).
+                restart_can_retry = true;
+                let registry = crate::args::flag_registry();
+                let classified = crate::args::classify(&base_raw_args, &registry);
+                let env = crate::args::EnvSet::new()
+                    .with_proxy_url(&base_proxy_url)
+                    .with_settings(app.settings_manager())
+                    .with_shim(_teammate_shim.as_ref())
+                    .build();
+                let args = crate::args::ArgAssembler::from_passthrough(&classified.args)
+                    .with_session_resume(&current_session_id)
+                    .with_settings(app.settings_manager())
+                    .with_teammate_mode(_teammate_shim.as_ref())
+                    .build();
+                let params = SpawnParams {
+                    command: "claude".into(),
+                    args,
+                    env,
+                    session_id: current_session_id.clone(),
+                    warnings: classified.warnings,
+                };
+                respawn_pty(
+                    &mut app,
+                    &mut pty_session,
+                    params,
+                    scrollback_lines,
+                    &events,
+                );
+                if !app.pty_lifecycle.is_attached() {
+                    restart_can_retry = false;
+                }
+            }
             Ok(AppEvent::PtyRestart { env_vars, cli_args }) => {
                 // Lifecycle is already Restarting (set in apply_settings).
                 // Always try --resume first. If the session hasn't had any
@@ -559,10 +596,7 @@ async fn run_ui_bridge(
                 }
             }
             UiCommand::RestartClaude => {
-                let _ = event_tx.send(AppEvent::PtyRestart {
-                    env_vars: vec![],
-                    cli_args: vec![],
-                });
+                let _ = event_tx.send(AppEvent::RestartClaude);
             }
         }
     }

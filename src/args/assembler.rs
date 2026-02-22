@@ -57,6 +57,13 @@ impl ArgAssembler {
         self
     }
 
+    /// Force `--resume <id>` (used by Ctrl+R restart).
+    pub fn with_session_resume(mut self, session_id: &str) -> Self {
+        self.args.push("--resume".into());
+        self.args.push(session_id.into());
+        self
+    }
+
     /// From settings manager (CLI flags from registry).
     pub fn with_settings(mut self, settings: &ClaudeSettingsManager) -> Self {
         self.args.extend(settings.to_cli_args());
