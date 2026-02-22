@@ -1,5 +1,5 @@
 use std::cmp::min;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
@@ -520,7 +520,11 @@ impl RotatingFile {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let file = File::create(&path).unwrap_or_else(|_| File::create("/dev/null").unwrap());
+        let file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)
+            .unwrap_or_else(|_| File::create("/dev/null").unwrap());
         let current_size = file.metadata().map(|m| m.len()).unwrap_or(0);
         Self {
             path,
