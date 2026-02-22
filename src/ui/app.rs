@@ -31,6 +31,7 @@ pub enum Focus {
 #[derive(Debug)]
 pub enum UiCommand {
     SwitchBackend { backend_id: String },
+    RestartClaude,
     RefreshStatus,
     RefreshMetrics { backend_id: Option<String> },
     RefreshBackends,
@@ -408,6 +409,14 @@ impl App {
 
     pub fn request_config_reload(&mut self) {
         self.send_command(UiCommand::ReloadConfig);
+    }
+
+    /// Request a Claude Code restart (Ctrl+R). Continues the current session.
+    pub fn request_restart_claude(&mut self) {
+        self.dispatch_pty(PtyIntent::Detach);
+        if !self.send_command(UiCommand::RestartClaude) {
+            self.dispatch_pty(PtyIntent::SpawnFailed);
+        }
     }
 
     pub fn request_switch_backend_by_index(&mut self, index: usize) -> bool {

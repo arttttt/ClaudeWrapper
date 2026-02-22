@@ -72,6 +72,8 @@ pub enum AppEvent {
         env_vars: Vec<(String, String)>,
         cli_args: Vec<String>,
     },
+    /// Claude Code restart requested (Ctrl+R) — resume current session.
+    RestartClaude,
 }
 
 pub struct EventHandler {
