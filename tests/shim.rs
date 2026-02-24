@@ -16,14 +16,14 @@ fn shim_dir(shim: &TeammateShim) -> String {
 fn create_succeeds_or_returns_error() {
     // In CI/dev environments claude may or may not be installed.
     // Just verify the function doesn't panic.
-    let _ = TeammateShim::create(12345, true);
+    let _ = TeammateShim::create(12345, "test-token", true);
 }
 
 // ── PATH env ─────────────────────────────────────────────────────────
 
 #[test]
 fn path_env_prepends_shim_dir() {
-    let shim = match TeammateShim::create(12345, true) {
+    let shim = match TeammateShim::create(12345, "test-token", true) {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -39,7 +39,7 @@ fn path_env_prepends_shim_dir() {
 
 #[test]
 fn tmux_shim_exists() {
-    let shim = match TeammateShim::create(12345, true) {
+    let shim = match TeammateShim::create(12345, "test-token", true) {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -49,7 +49,7 @@ fn tmux_shim_exists() {
 
 #[test]
 fn tmux_shim_is_executable() {
-    let shim = match TeammateShim::create(12345, true) {
+    let shim = match TeammateShim::create(12345, "test-token", true) {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -66,7 +66,7 @@ fn tmux_shim_is_executable() {
 
 #[test]
 fn tmux_shim_contains_log_and_shim_dir() {
-    let shim = match TeammateShim::create(12345, true) {
+    let shim = match TeammateShim::create(12345, "test-token", true) {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -80,7 +80,7 @@ fn tmux_shim_contains_log_and_shim_dir() {
 
 #[test]
 fn tmux_shim_contains_port_and_injection_logic() {
-    let shim = match TeammateShim::create(7777, true) {
+    let shim = match TeammateShim::create(7777, "test-token", true) {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -103,7 +103,7 @@ fn tmux_shim_contains_port_and_injection_logic() {
 
 #[test]
 fn tmux_log_path_points_to_shim_dir() {
-    let shim = match TeammateShim::create(12345, true) {
+    let shim = match TeammateShim::create(12345, "test-token", true) {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -118,4 +118,68 @@ fn tmux_log_path_points_to_shim_dir() {
         log_path.to_str().unwrap().ends_with("tmux_shim.log"),
         "log file should be tmux_shim.log"
     );
+}
+
+// ── session token injection ──────────────────────────────────────────
+
+#[test]
+fn tmux_shim_contains_session_token_header() {
+    let token = "my-secret-session-token-42";
+    let shim = match TeammateShim::create(8080, token, true) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let dir = shim_dir(&shim);
+    let script = std::fs::read_to_string(Path::new(&dir).join("tmux")).unwrap();
+
+    assert!(
+        script.contains("ANTHROPIC_CUSTOM_HEADERS"),
+        "should inject ANTHROPIC_CUSTOM_HEADERS"
+    );
+    assert!(
+        script.contains(&format!("x-session-token:{}", token)),
+        "should contain the session token value"
+    );
+}
+
+#[test]
+fn tmux_shim_different_tokens_produce_different_scripts() {
+    let shim1 = match TeammateShim::create(8080, "token-aaa", true) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let shim2 = match TeammateShim::create(8080, "token-bbb", true) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let dir1 = shim_dir(&shim1);
+    let dir2 = shim_dir(&shim2);
+
+    let script1 = std::fs::read_to_string(Path::new(&dir1).join("tmux")).unwrap();
+    let script2 = std::fs::read_to_string(Path::new(&dir2).join("tmux")).unwrap();
+
+    assert!(script1.contains("x-session-token:token-aaa"));
+    assert!(script2.contains("x-session-token:token-bbb"));
+    assert_ne!(script1, script2, "different tokens should produce different scripts");
+}
+
+#[test]
+fn tmux_shim_injects_both_url_and_headers() {
+    let shim = match TeammateShim::create(9999, "test-tok", true) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let dir = shim_dir(&shim);
+    let script = std::fs::read_to_string(Path::new(&dir).join("tmux")).unwrap();
+
+    // Both INJECT_URL and INJECT_HEADERS should be defined
+    assert!(script.contains("INJECT_URL="));
+    assert!(script.contains("INJECT_HEADERS="));
+
+    // Both should be used in Case A (standalone arg)
+    assert!(script.contains(r#"args+=("$INJECT_HEADERS")"#));
+
+    // Both should be used in Case B (embedded) — ANTHROPIC_CUSTOM_HEADERS replacement
+    assert!(script.contains("ANTHROPIC_CUSTOM_HEADERS="));
 }

@@ -2,8 +2,9 @@
 //!
 //! Intercepts all tmux calls from Claude Code. For `send-keys` commands
 //! that launch a teammate claude process, injects `ANTHROPIC_BASE_URL`
-//! pointing to the `/teammate` prefix on our proxy so the routing layer
-//! can direct teammate traffic to a cheaper backend.
+//! pointing to the `/teammate` prefix on our proxy and `ANTHROPIC_CUSTOM_HEADERS`
+//! with the session token so the routing layer can authenticate and direct
+//! teammate traffic to a cheaper backend.
 //!
 //! All other tmux commands are forwarded unchanged to the real binary.
 
@@ -57,6 +58,7 @@ fi
 # Claude Code passes the entire command as ONE arg to send-keys (Case B),
 # but we also handle individual args (Case A) for robustness.
 INJECT_URL="ANTHROPIC_BASE_URL=http://127.0.0.1:__PORT__/teammate"
+INJECT_HEADERS="ANTHROPIC_CUSTOM_HEADERS=x-session-token:__SESSION_TOKEN__"
 args=()
 has_send_keys=false
 injected=false
@@ -71,9 +73,10 @@ for arg in "$@"; do
     # Case A: claude path as standalone arg (/abs/path/claude)
     if [[ "$arg" == /* ]] && [[ "$arg" == *"/claude" ]]; then
       args+=("$INJECT_URL")
+      args+=("$INJECT_HEADERS")
       args+=("$arg")
       injected=true
-      slog "INJECT teammate URL (standalone arg)"
+      slog "INJECT teammate URL + headers (standalone arg)"
       continue
     fi
     # Case B: claude path embedded in a longer string (confirmed format)
@@ -81,22 +84,32 @@ for arg in "$@"; do
       # Claude Code may pass its own ANTHROPIC_BASE_URL in the command.
       # We must REPLACE it (not add a second one) to avoid the original
       # overwriting ours depending on variable order.
+      # Same for ANTHROPIC_CUSTOM_HEADERS — replace if present.
       # Uses bash regex (=~) — no sed subprocess or escaping issues.
       slog "BEFORE inject: $(printf '%q' "$arg")"
+
+      # Replace or inject ANTHROPIC_BASE_URL
       if [[ "$arg" =~ ^(.*)ANTHROPIC_BASE_URL=[^[:space:]]+(.*) ]]; then
-        # Replace existing ANTHROPIC_BASE_URL value with our /teammate URL.
         arg="${BASH_REMATCH[1]}$INJECT_URL${BASH_REMATCH[2]}"
       elif [[ "$arg" =~ ^(.*[[:space:]])(/[^[:space:]]*/claude)([[:space:]].*|$) ]]; then
-        # No existing ANTHROPIC_BASE_URL — inject before claude path.
         arg="${BASH_REMATCH[1]}$INJECT_URL ${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
       elif [[ "$arg" =~ ^(/[^[:space:]]*/claude)([[:space:]].*|$) ]]; then
-        # Claude path at the very start of the string (no leading space).
         arg="$INJECT_URL ${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
       fi
+
+      # Replace or inject ANTHROPIC_CUSTOM_HEADERS
+      if [[ "$arg" =~ ^(.*)ANTHROPIC_CUSTOM_HEADERS=[^[:space:]]+(.*) ]]; then
+        arg="${BASH_REMATCH[1]}$INJECT_HEADERS${BASH_REMATCH[2]}"
+      elif [[ "$arg" =~ ^(.*[[:space:]])(/[^[:space:]]*/claude)([[:space:]].*|$) ]]; then
+        arg="${BASH_REMATCH[1]}$INJECT_HEADERS ${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+      elif [[ "$arg" =~ ^(/[^[:space:]]*/claude)([[:space:]].*|$) ]]; then
+        arg="$INJECT_HEADERS ${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+      fi
+
       slog "AFTER  inject: $(printf '%q' "$arg")"
       args+=("$arg")
       injected=true
-      slog "INJECT teammate URL (embedded in string)"
+      slog "INJECT teammate URL + headers (embedded in string)"
       continue
     fi
   fi
@@ -114,9 +127,10 @@ fi
 "#;
 
 /// Install the tmux shim script into `dir`.
-pub fn install(dir: &Path, proxy_port: u16, log_enabled: bool) -> Result<()> {
+pub fn install(dir: &Path, proxy_port: u16, session_token: &str, log_enabled: bool) -> Result<()> {
     let script = TEMPLATE
         .replace("__PORT__", &proxy_port.to_string())
+        .replace("__SESSION_TOKEN__", session_token)
         .replace("__LOG_ENABLED__", if log_enabled { "true" } else { "false" });
     write_executable(dir, "tmux", &script)
 }
