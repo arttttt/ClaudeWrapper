@@ -15,6 +15,7 @@ fn build_spawn(raw_args: &[String]) -> anyclaude::args::SpawnParams {
     build_spawn_params(
         raw_args,
         "http://localhost:3000",
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     )
@@ -168,6 +169,7 @@ fn resume_appends_extra_args() {
     let p = build_restart_params(
         &args,
         "http://localhost:3000",
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
         vec![],
@@ -194,6 +196,7 @@ fn restart_merges_extra_env() {
     let p = build_restart_params(
         &args,
         "http://localhost:3000",
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
         extra_env,

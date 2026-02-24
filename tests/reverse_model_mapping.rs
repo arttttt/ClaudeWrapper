@@ -373,7 +373,7 @@ fn create_passthrough_backend(name: &str, base_url: &str) -> Backend {
 async fn start_proxy(config: Config) -> (SocketAddr, String, tokio::task::JoinHandle<()>) {
     let config_store = ConfigStore::new(config, PathBuf::from("/tmp/test-reverse-map.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-    let mut server = ProxyServer::new(config_store.clone(), debug_logger).unwrap();
+    let mut server = ProxyServer::new(config_store.clone(), debug_logger, None).unwrap();
     let (proxy_addr, _base_url) = server.try_bind(&config_store).await.unwrap();
     let handle = tokio::spawn(async move {
         let _ = server.run().await;

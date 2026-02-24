@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 const UI_COMMAND_BUFFER: usize = 32;
 const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -60,14 +61,22 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     let base_raw_args = claude_args.clone();
     let base_proxy_url = config_store.get().proxy.base_url.clone();
 
+    // Generate session token for proxy authentication.
+    // This token is injected via ANTHROPIC_CUSTOM_HEADERS and validated by the proxy.
+    let session_token = Uuid::new_v4().to_string();
+
     // Build spawn parameters FIRST to get session_id before creating logger.
     // This prevents a race condition where logs are written to the wrong file.
+    // NOTE: build_spawn_params is called early because we need the session_id for
+    // per-session logging (debug log file paths include session_id). The env
+    // vars are populated with the config's base_proxy_url at this point.
     let scrollback_lines = config_store.get().terminal.scrollback_lines;
     let mut settings_manager = ClaudeSettingsManager::new();
     settings_manager.load_from_toml(&config_store.get().claude_settings);
-    let spawn = build_spawn_params(
+    let mut spawn = build_spawn_params(
         &base_raw_args,
         &base_proxy_url,
+        &session_token,
         &settings_manager,
         None, // shim not needed here — we only use session_id from the result
     );
@@ -101,13 +110,26 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     let mut app = App::new(config_store.clone());
     app.set_ipc_sender(ui_command_tx.clone());
 
-    let mut proxy_server = ProxyServer::new(config_store.clone(), debug_logger.clone())
+    let mut proxy_server = ProxyServer::new(config_store.clone(), debug_logger.clone(), Some(session_token.clone()))
         .map_err(|err| io::Error::other(err.to_string()))?;
 
-    // Try to bind and get the actual port, updating the base URL
+    // Try to bind and get the actual port, updating the base URL.
+    // NOTE: try_bind may bind to a different port than specified in config
+    // (e.g., if the configured port is already in use). We must update
+    // ANTHROPIC_BASE_URL in spawn.env to match the actual bound port so
+    // the child Claude Code process can reach the proxy.
     let (actual_addr, actual_base_url) = async_runtime.block_on(async {
         proxy_server.try_bind(&config_store).await
     }).map_err(|err| io::Error::other(err.to_string()))?;
+
+    // Update ANTHROPIC_BASE_URL in spawn.env to use the actual bound port.
+    // This is necessary because build_spawn_params was called before we knew
+    // the actual port (it needed session_id early for per-session logging).
+    for (key, value) in &mut spawn.env {
+        if key == "ANTHROPIC_BASE_URL" {
+            *value = actual_base_url.clone();
+        }
+    }
 
     // Create teammate shim if agent_teams routing is configured.
     // The shim must stay alive for the entire session (owns a temp directory).
@@ -420,6 +442,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                         let params = build_spawn_params(
                             &base_raw_args,
                             &base_proxy_url,
+                            &session_token,
                             app.settings_manager(),
                             _teammate_shim.as_ref(),
                         );
@@ -455,6 +478,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 let classified = crate::args::classify(&base_raw_args, &registry);
                 let env = crate::args::EnvSet::new()
                     .with_proxy_url(&base_proxy_url)
+                    .with_session_token(&session_token)
                     .with_settings(app.settings_manager())
                     .with_shim(_teammate_shim.as_ref())
                     .build();
@@ -491,6 +515,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 let params = build_restart_params(
                     &base_raw_args,
                     &base_proxy_url,
+                    &session_token,
                     app.settings_manager(),
                     _teammate_shim.as_ref(),
                     env_vars,

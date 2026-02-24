@@ -67,7 +67,7 @@ async fn test_request_routed_to_active_backend() {
     );
     let config_store = ConfigStore::new(config.clone(), PathBuf::from("/tmp/test.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-    let mut server = ProxyServer::new(config_store.clone(), debug_logger).unwrap();
+    let mut server = ProxyServer::new(config_store.clone(), debug_logger, None).unwrap();
 
     // Bind to port before spawning - this prevents race conditions
     let (proxy_addr, _base_url) = server.try_bind(&config_store).await.unwrap();
@@ -111,7 +111,7 @@ async fn test_backend_switch_routes_to_new_backend() {
     );
     let config_store = ConfigStore::new(config.clone(), PathBuf::from("/tmp/test.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-    let mut server = ProxyServer::new(config_store.clone(), debug_logger).unwrap();
+    let mut server = ProxyServer::new(config_store.clone(), debug_logger, None).unwrap();
     let backend_state = server.backend_state();
 
     // Bind to port before spawning - this prevents race conditions
@@ -166,7 +166,7 @@ async fn test_switch_to_nonexistent_backend_fails() {
     );
     let config_store = ConfigStore::new(config, PathBuf::from("/tmp/test.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-    let server = ProxyServer::new(config_store, debug_logger).unwrap();
+    let server = ProxyServer::new(config_store, debug_logger, None).unwrap();
     let backend_state = server.backend_state();
 
     let result = backend_state.switch_backend("nonexistent");
@@ -189,7 +189,7 @@ async fn test_list_backends() {
     );
     let config_store = ConfigStore::new(config, PathBuf::from("/tmp/test.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-    let server = ProxyServer::new(config_store, debug_logger).unwrap();
+    let server = ProxyServer::new(config_store, debug_logger, None).unwrap();
     let backend_state = server.backend_state();
 
     let backends = backend_state.list_backends();

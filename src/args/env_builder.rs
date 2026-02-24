@@ -22,6 +22,13 @@ impl EnvSet {
         self
     }
 
+    /// Session token for proxy authentication via ANTHROPIC_CUSTOM_HEADERS.
+    pub fn with_session_token(mut self, token: &str) -> Self {
+        // Format: newline-separated headers as "name:value" pairs
+        self.vars.push(("ANTHROPIC_CUSTOM_HEADERS".into(), format!("x-session-token:{}", token)));
+        self
+    }
+
     /// From settings manager (agent teams, etc.)
     pub fn with_settings(mut self, settings: &ClaudeSettingsManager) -> Self {
         self.vars.extend(settings.to_env_vars());
