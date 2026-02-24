@@ -135,7 +135,7 @@ fn shim_script_port_matches_spawn_env_port() {
     // Create a shim with a specific port
     let test_port: u16 = 12345;
 
-    let shim = match TeammateShim::create(test_port, false) {
+    let shim = match TeammateShim::create(test_port, "test-token", false) {
         Ok(s) => s,
         Err(_) => {
             // Skip if shim creation fails (e.g., no tmux installed)
@@ -184,11 +184,11 @@ fn shim_script_port_matches_spawn_env_port() {
 /// Test that different ports result in different shim scripts.
 #[test]
 fn different_ports_produce_different_shim_scripts() {
-    let shim1 = match TeammateShim::create(11111, false) {
+    let shim1 = match TeammateShim::create(11111, "test-token", false) {
         Ok(s) => s,
         Err(_) => return, // Skip if shim creation fails
     };
-    let shim2 = match TeammateShim::create(22222, false) {
+    let shim2 = match TeammateShim::create(22222, "test-token", false) {
         Ok(s) => s,
         Err(_) => return, // Skip if shim creation fails
     };
@@ -349,7 +349,7 @@ fn env_set_with_proxy_url_directly() {
 /// Test that EnvSet preserves proxy URL when adding shim.
 #[test]
 fn env_set_proxy_url_with_shim() {
-    let shim = match TeammateShim::create(4000, false) {
+    let shim = match TeammateShim::create(4000, "test-token", false) {
         Ok(s) => s,
         Err(_) => return, // Skip if shim creation fails
     };
@@ -403,7 +403,7 @@ fn env_set_order_independent() {
 /// Test that the tmux shim script correctly references the /teammate route.
 #[test]
 fn tmux_shim_includes_teammate_route() {
-    let shim = match TeammateShim::create(4000, false) {
+    let shim = match TeammateShim::create(4000, "test-token", false) {
         Ok(s) => s,
         Err(_) => return, // Skip if shim creation fails
     };
@@ -427,7 +427,7 @@ fn tmux_shim_includes_teammate_route() {
 /// Test that shim handles the claude path detection correctly.
 #[test]
 fn tmux_shim_detects_claude_invocation() {
-    let shim = match TeammateShim::create(4000, false) {
+    let shim = match TeammateShim::create(4000, "test-token", false) {
         Ok(s) => s,
         Err(_) => return, // Skip if shim creation fails
     };
