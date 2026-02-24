@@ -62,10 +62,13 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
 
     // Build spawn parameters FIRST to get session_id before creating logger.
     // This prevents a race condition where logs are written to the wrong file.
+    // NOTE: build_spawn_params is called early because we need the session_id for
+    // per-session logging (debug log file paths include session_id). The env
+    // vars are populated with the config's base_proxy_url at this point.
     let scrollback_lines = config_store.get().terminal.scrollback_lines;
     let mut settings_manager = ClaudeSettingsManager::new();
     settings_manager.load_from_toml(&config_store.get().claude_settings);
-    let spawn = build_spawn_params(
+    let mut spawn = build_spawn_params(
         &base_raw_args,
         &base_proxy_url,
         &settings_manager,
@@ -104,10 +107,23 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     let mut proxy_server = ProxyServer::new(config_store.clone(), debug_logger.clone())
         .map_err(|err| io::Error::other(err.to_string()))?;
 
-    // Try to bind and get the actual port, updating the base URL
+    // Try to bind and get the actual port, updating the base URL.
+    // NOTE: try_bind may bind to a different port than specified in config
+    // (e.g., if the configured port is already in use). We must update
+    // ANTHROPIC_BASE_URL in spawn.env to match the actual bound port so
+    // the child Claude Code process can reach the proxy.
     let (actual_addr, actual_base_url) = async_runtime.block_on(async {
         proxy_server.try_bind(&config_store).await
     }).map_err(|err| io::Error::other(err.to_string()))?;
+
+    // Update ANTHROPIC_BASE_URL in spawn.env to use the actual bound port.
+    // This is necessary because build_spawn_params was called before we knew
+    // the actual port (it needed session_id early for per-session logging).
+    for (key, value) in &mut spawn.env {
+        if key == "ANTHROPIC_BASE_URL" {
+            *value = actual_base_url.clone();
+        }
+    }
 
     // Create teammate shim if agent_teams routing is configured.
     // The shim must stay alive for the entire session (owns a temp directory).
