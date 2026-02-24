@@ -32,6 +32,7 @@ pub struct SpawnParams {
 ///
 /// * `raw_args` - Raw arguments from the user (after wrapper flags like `--backend` are stripped)
 /// * `proxy_url` - The proxy URL to inject as ANTHROPIC_BASE_URL
+/// * `session_token` - The session token to inject via ANTHROPIC_CUSTOM_HEADERS
 /// * `settings` - Settings manager for CLI flags and env vars
 /// * `shim` - Optional teammate shim for PATH override and --teammate-mode
 ///
@@ -41,6 +42,7 @@ pub struct SpawnParams {
 pub fn build_spawn_params(
     raw_args: &[String],
     proxy_url: &str,
+    session_token: &str,
     settings: &ClaudeSettingsManager,
     shim: Option<&TeammateShim>,
 ) -> SpawnParams {
@@ -61,6 +63,7 @@ pub fn build_spawn_params(
     // Stage 3: Build environment
     let env = EnvSet::new()
         .with_proxy_url(proxy_url)
+        .with_session_token(session_token)
         .with_settings(settings)
         .with_shim(shim)
         .build();
@@ -92,6 +95,7 @@ pub fn build_spawn_params(
 pub fn build_restart_params(
     raw_args: &[String],
     proxy_url: &str,
+    session_token: &str,
     settings: &ClaudeSettingsManager,
     shim: Option<&TeammateShim>,
     extra_env: Vec<(String, String)>,
@@ -114,6 +118,7 @@ pub fn build_restart_params(
     // Stage 3: Build environment (with extra)
     let env = EnvSet::new()
         .with_proxy_url(proxy_url)
+        .with_session_token(session_token)
         .with_settings(settings)
         .with_shim(shim)
         .with_extra(extra_env)

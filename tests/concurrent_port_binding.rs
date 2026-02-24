@@ -90,7 +90,7 @@ async fn test_concurrent_port_zero_binding() {
             let config = test_config(create_backend(&format!("test{}", i), &mock_url), bind_addr);
             let config_store = ConfigStore::new(config.clone(), PathBuf::from(&format!("/tmp/test{}.toml", i)));
             let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-            let mut server = ProxyServer::new(config_store.clone(), debug_logger).unwrap();
+            let mut server = ProxyServer::new(config_store.clone(), debug_logger, None).unwrap();
 
             // Bind to port - this should atomically allocate the port
             let (addr, _) = server.try_bind(&config_store).await.unwrap();
@@ -180,7 +180,7 @@ async fn test_concurrent_same_start_port_gets_consecutive_ports() {
             let config = test_config(create_backend(&format!("test{}", i), &mock_url), &bind_addr_clone);
             let config_store = ConfigStore::new(config.clone(), PathBuf::from(&format!("/tmp/test{}.toml", i)));
             let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-            let mut server = ProxyServer::new(config_store.clone(), debug_logger).unwrap();
+            let mut server = ProxyServer::new(config_store.clone(), debug_logger, None).unwrap();
 
             // Bind - due to fallback logic, each will get a unique port
             let (addr, _) = server.try_bind(&config_store).await.unwrap();
@@ -246,7 +246,7 @@ async fn test_port_remains_bound_between_try_bind_and_run() {
     let config = test_config(create_backend("test", &mock.base_url()), bind_addr);
     let config_store = ConfigStore::new(config.clone(), PathBuf::from("/tmp/test.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-    let mut server = ProxyServer::new(config_store.clone(), debug_logger).unwrap();
+    let mut server = ProxyServer::new(config_store.clone(), debug_logger, None).unwrap();
 
     // Bind to port
     let (addr, _) = server.try_bind(&config_store).await.unwrap();

@@ -64,7 +64,7 @@ async fn test_full_lifecycle_health_request_shutdown() {
     let config = test_config(create_backend("test", &mock.base_url()), &bind_addr);
     let config_store = ConfigStore::new(config.clone(), PathBuf::from("/tmp/test.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-    let mut server = ProxyServer::new(config_store.clone(), debug_logger).unwrap();
+    let mut server = ProxyServer::new(config_store.clone(), debug_logger, None).unwrap();
 
     // Bind to port before spawning - this prevents race conditions
     let (proxy_addr, _base_url) = server.try_bind(&config_store).await.unwrap();
@@ -116,7 +116,7 @@ async fn test_multiple_concurrent_requests() {
     let config = test_config(create_backend("test", &mock.base_url()), &bind_addr);
     let config_store = ConfigStore::new(config.clone(), PathBuf::from("/tmp/test.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-    let mut server = ProxyServer::new(config_store.clone(), debug_logger).unwrap();
+    let mut server = ProxyServer::new(config_store.clone(), debug_logger, None).unwrap();
 
     // Bind to port before spawning - this prevents race conditions
     let (proxy_addr, _base_url) = server.try_bind(&config_store).await.unwrap();

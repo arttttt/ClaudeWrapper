@@ -33,6 +33,7 @@ impl ProxyServer {
     pub fn new(
         config: ConfigStore,
         debug_logger: Arc<DebugLogger>,
+        session_token: Option<String>,
     ) -> Result<Self, crate::backend::BackendError> {
         let cfg = config.get();
         let timeout_config = TimeoutConfig::from(&cfg.defaults);
@@ -48,6 +49,7 @@ impl ProxyServer {
             observability.clone(),
             debug_logger.clone(),
             transformer_registry.clone(),
+            session_token,
         );
         Ok(Self {
             addr: SocketAddr::from(([127, 0, 0, 1], 0)),

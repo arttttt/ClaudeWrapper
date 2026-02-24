@@ -73,7 +73,7 @@ impl TestHarness {
     async fn start(config: Config) -> Self {
         let config_store = ConfigStore::new(config, PathBuf::from("/tmp/test.toml"));
         let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-        let mut server = ProxyServer::new(config_store.clone(), debug_logger).unwrap();
+        let mut server = ProxyServer::new(config_store.clone(), debug_logger, None).unwrap();
         let (proxy_addr, _) = server.try_bind(&config_store).await.unwrap();
         let handle = server.handle();
         tokio::spawn(async move { let _ = server.run().await; });
@@ -385,7 +385,7 @@ async fn teammate_requests_dont_increment_thinking_session() {
     );
     let config_store = ConfigStore::new(config, PathBuf::from("/tmp/test.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-    let mut server = ProxyServer::new(config_store.clone(), debug_logger).unwrap();
+    let mut server = ProxyServer::new(config_store.clone(), debug_logger, None).unwrap();
     let (proxy_addr, _) = server.try_bind(&config_store).await.unwrap();
     let registry = server.transformer_registry();
     let handle = server.handle();
@@ -491,7 +491,7 @@ async fn backend_switch_doesnt_affect_teammate_routing() {
     );
     let config_store = ConfigStore::new(config, PathBuf::from("/tmp/test.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));
-    let mut server = ProxyServer::new(config_store.clone(), debug_logger).unwrap();
+    let mut server = ProxyServer::new(config_store.clone(), debug_logger, None).unwrap();
     let backend_state = server.backend_state();
     let (proxy_addr, _) = server.try_bind(&config_store).await.unwrap();
     let handle = server.handle();

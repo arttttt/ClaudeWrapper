@@ -44,6 +44,7 @@ pub struct RouterEngine {
     pub(crate) transformer_registry: Arc<TransformerRegistry>,
     #[cfg(feature = "unified-pipeline")]
     pipeline_config: Option<PipelineConfig>,
+    pub(crate) session_token: Option<String>,
 }
 
 impl RouterEngine {
@@ -54,6 +55,7 @@ impl RouterEngine {
         observability: ObservabilityHub,
         debug_logger: Arc<DebugLogger>,
         transformer_registry: Arc<TransformerRegistry>,
+        session_token: Option<String>,
     ) -> Self {
         #[cfg(feature = "unified-pipeline")]
         let pipeline_config = Some(PipelineConfig::new(
@@ -77,48 +79,9 @@ impl RouterEngine {
             transformer_registry,
             #[cfg(feature = "unified-pipeline")]
             pipeline_config,
+            session_token,
         }
     }
-}
-
-pub fn build_router(
-    engine: RouterEngine,
-    teams: &Option<AgentTeamsConfig>,
-) -> Router {
-    // Main pipeline: with thinking middleware
-    let main = Router::new()
-        .fallback(proxy_handler)
-        .layer(axum::middleware::from_fn_with_state(
-            engine.clone(),
-            thinking_middleware,
-        ))
-        .with_state(engine.clone());
-
-    let mut router = Router::new()
-        .route("/health", get(health_handler))
-        .with_state(engine.clone());
-
-    // Teammate pipeline: no thinking, fixed backend
-    if let Some(config) = teams {
-        let teammate = Router::new()
-            .fallback(proxy_handler)
-            .layer(Extension(BackendOverride(
-                config.teammate_backend.clone(),
-            )))
-            .with_state(engine.clone());
-
-        crate::metrics::app_log(
-            "router",
-            &format!(
-                "Teammate pipeline: /teammate/* → backend={}",
-                config.teammate_backend,
-            ),
-        );
-
-        router = router.nest("/teammate", teammate);
-    }
-
-    router.merge(main)
 }
 
 /// Thinking middleware — creates a ThinkingSession for main agent requests.
@@ -136,6 +99,80 @@ async fn thinking_middleware(
     );
     req.extensions_mut().insert(session);
     next.run(req).await
+}
+
+/// Auth middleware — validates session token for proxy requests.
+///
+/// Rejects requests without valid x-session-token header when session_token is configured.
+/// Skips validation for health endpoint.
+async fn auth_middleware(
+    State(state): State<RouterEngine>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Some(ref expected_token) = state.session_token {
+        let session_header = req.headers()
+            .get("x-session-token")
+            .and_then(|v| v.to_str().ok());
+
+        let valid = session_header.map_or(false, |t| t == expected_token);
+
+        if !valid {
+            return Response::builder()
+                .status(401)
+                .body(Body::from("Unauthorized: invalid session token"))
+                .unwrap();
+        }
+    }
+    next.run(req).await
+}
+
+pub fn build_router(
+    engine: RouterEngine,
+    teams: &Option<AgentTeamsConfig>,
+) -> Router {
+    // Main pipeline: with auth and thinking middleware
+    let main = Router::new()
+        .fallback(proxy_handler)
+        .layer(axum::middleware::from_fn_with_state(
+            engine.clone(),
+            thinking_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            engine.clone(),
+            auth_middleware,
+        ))
+        .with_state(engine.clone());
+
+    let mut router = Router::new()
+        .route("/health", get(health_handler))
+        .with_state(engine.clone());
+
+    // Teammate pipeline: auth middleware, no thinking, fixed backend
+    if let Some(config) = teams {
+        let teammate = Router::new()
+            .fallback(proxy_handler)
+            .layer(Extension(BackendOverride(
+                config.teammate_backend.clone(),
+            )))
+            .layer(axum::middleware::from_fn_with_state(
+                engine.clone(),
+                auth_middleware,
+            ))
+            .with_state(engine.clone());
+
+        crate::metrics::app_log(
+            "router",
+            &format!(
+                "Teammate pipeline: /teammate/* → backend={}",
+                config.teammate_backend,
+            ),
+        );
+
+        router = router.nest("/teammate", teammate);
+    }
+
+    router.merge(main)
 }
 
 async fn health_handler(

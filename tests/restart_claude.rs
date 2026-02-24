@@ -301,6 +301,7 @@ fn build_restart_params_with_empty_extras() {
     let params = build_restart_params(
         &args,
         "http://localhost:3000",
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None, // no shim
         empty_env,

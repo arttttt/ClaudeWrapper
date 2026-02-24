@@ -27,6 +27,7 @@ fn spawn_env_contains_provided_proxy_url() {
     let params = build_spawn_params(
         &args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None, // no shim
     );
@@ -53,6 +54,7 @@ fn restart_env_contains_provided_proxy_url() {
     let params = build_restart_params(
         &args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
         vec![], // no extra env
@@ -85,6 +87,7 @@ fn restart_merges_extra_env_preserves_proxy_url() {
     let params = build_restart_params(
         &args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
         extra_env,
@@ -159,6 +162,7 @@ fn shim_script_port_matches_spawn_env_port() {
     let params = build_spawn_params(
         &args,
         &proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         Some(&shim),
     );
@@ -227,6 +231,7 @@ fn fallback_port_reflected_in_spawn_env() {
     let params = build_spawn_params(
         &args,
         actual_proxy_url, // Use actual, not config
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
@@ -260,6 +265,7 @@ fn restart_maintains_port_consistency_after_fallback() {
     let params = build_restart_params(
         &args,
         actual_proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
         vec![],
@@ -293,6 +299,7 @@ fn initial_and_resume_modes_both_have_proxy_url() {
     let initial_params = build_spawn_params(
         &initial_args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
@@ -302,6 +309,7 @@ fn initial_and_resume_modes_both_have_proxy_url() {
     let resume_params = build_spawn_params(
         &resume_args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
@@ -453,6 +461,7 @@ fn spawn_params_with_empty_args() {
     let params = build_spawn_params(
         &args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
@@ -480,6 +489,7 @@ fn restart_params_with_empty_everything() {
     let params = build_restart_params(
         &args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
         vec![], // empty extra env
@@ -509,6 +519,7 @@ fn spawn_env_preserves_localhost_url() {
     let params = build_spawn_params(
         &args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
@@ -535,6 +546,7 @@ fn spawn_env_preserves_ipv6_url() {
     let params = build_spawn_params(
         &args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
@@ -566,12 +578,14 @@ fn multiple_spawns_same_proxy_url() {
     let params1 = build_spawn_params(
         &args1,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
     let params2 = build_spawn_params(
         &args2,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
@@ -601,6 +615,7 @@ fn spawn_then_restart_maintains_url() {
     let spawn_params = build_spawn_params(
         &spawn_args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
@@ -610,6 +625,7 @@ fn spawn_then_restart_maintains_url() {
     let restart_params = build_restart_params(
         &restart_args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
         vec![],
@@ -646,6 +662,7 @@ fn spawn_env_preserves_trailing_slash() {
     let params = build_spawn_params(
         &args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
@@ -672,6 +689,7 @@ fn spawn_env_preserves_path() {
     let params = build_spawn_params(
         &args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
@@ -698,6 +716,7 @@ fn spawn_env_preserves_https() {
     let params = build_spawn_params(
         &args,
         proxy_url,
+        "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
     );
