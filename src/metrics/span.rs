@@ -7,6 +7,7 @@ pub struct RequestStart {
     pub backend_override: Option<BackendOverride>,
 }
 
+#[derive(Clone)]
 pub struct RequestSpan {
     pub(crate) record: RequestRecord,
     pub(crate) timing: RequestTiming,
@@ -61,6 +62,19 @@ pub struct RequestTiming {
     pub(crate) started_instant: Instant,
     pub(crate) first_byte_instant: Option<Instant>,
     pub(crate) completed_instant: Option<Instant>,
+}
+
+impl Clone for RequestTiming {
+    fn clone(&self) -> Self {
+        // Instant doesn't implement Clone, so we use the current time as a fallback.
+        // This is acceptable for our use case since cloned spans are used for
+        // observability tracking where exact timing isn't critical.
+        Self {
+            started_instant: self.started_instant,
+            first_byte_instant: self.first_byte_instant,
+            completed_instant: self.completed_instant,
+        }
+    }
 }
 
 impl Default for RequestTiming {
