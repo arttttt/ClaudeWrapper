@@ -21,7 +21,6 @@ fn spawn_env_contains_custom_headers_with_session_token() {
         session_token,
         &ClaudeSettingsManager::new(),
         None,
-        false, // subagent_routing
     );
 
     // Check that ANTHROPIC_CUSTOM_HEADERS contains the session token
@@ -60,7 +59,6 @@ fn restart_env_contains_custom_headers_with_session_token() {
         session_token,
         &ClaudeSettingsManager::new(),
         None,
-        false, // subagent_routing
         vec![],
         vec![],
     );
@@ -118,7 +116,6 @@ fn spawn_env_has_all_required_vars() {
         session_token,
         &ClaudeSettingsManager::new(),
         None,
-        false, // subagent_routing
     );
 
     // Should have ANTHROPIC_BASE_URL
@@ -147,7 +144,6 @@ fn restart_env_has_all_required_vars() {
         session_token,
         &ClaudeSettingsManager::new(),
         None,
-        false, // subagent_routing
         vec![],
         vec![],
     );

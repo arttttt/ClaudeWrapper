@@ -18,7 +18,6 @@ fn build_spawn(raw_args: &[String]) -> anyclaude::args::SpawnParams {
         "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
-        false, // subagent_routing
     )
 }
 
@@ -173,7 +172,6 @@ fn resume_appends_extra_args() {
         "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
-        false, // subagent_routing
         vec![],
         extra,
     );
@@ -201,7 +199,6 @@ fn restart_merges_extra_env() {
         "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
-        false, // subagent_routing
         extra_env,
         vec![],
     );

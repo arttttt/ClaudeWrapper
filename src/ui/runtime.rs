@@ -65,11 +65,6 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     // This token is injected via ANTHROPIC_CUSTOM_HEADERS and validated by the proxy.
     let session_token = Uuid::new_v4().to_string();
 
-    // Determine if subagent routing is enabled (for CLAUDE_CODE_SUBAGENT_MODEL env var)
-    let subagent_routing = config_store.get().agent_teams
-        .as_ref()
-        .is_some_and(|at| at.subagent_backend.is_some());
-
     // Build spawn parameters FIRST to get session_id before creating logger.
     // This prevents a race condition where logs are written to the wrong file.
     // NOTE: build_spawn_params is called early because we need the session_id for
@@ -84,7 +79,6 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
         &session_token,
         &settings_manager,
         None, // shim not needed here — we only use session_id from the result
-        subagent_routing,
     );
     let current_session_id = spawn.session_id.clone();
 
@@ -463,7 +457,6 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                             &session_token,
                             app.settings_manager(),
                             _teammate_shim.as_ref(),
-                            subagent_routing,
                         );
                         respawn_pty(
                             &mut app,
@@ -500,7 +493,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     .with_session_token(&session_token)
                     .with_settings(app.settings_manager())
                     .with_shim(_teammate_shim.as_ref())
-                    .with_subagent_routing(subagent_routing)
+                    .with_subagent_routing()
                     .build();
                 let args = crate::args::ArgAssembler::from_passthrough(&classified.args)
                     .with_session_resume(&current_session_id)
@@ -538,7 +531,6 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     &session_token,
                     app.settings_manager(),
                     _teammate_shim.as_ref(),
-                    subagent_routing,
                     env_vars,
                     cli_args,
                 );
