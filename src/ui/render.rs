@@ -307,13 +307,6 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                 // Show current subagent backend or "Disabled"
                 let subagent_backend = app.subagent_backend();
                 if let Some(current) = subagent_backend {
-                    // Find the display name for current subagent backend
-                    let _display_name = app.backends()
-                        .iter()
-                        .find(|b| b.id == current)
-                        .map(|b| b.display_name.as_str())
-                        .unwrap_or(current);
-
                     let max_name_width = app.backends()
                         .iter()
                         .map(|b| b.display_name.chars().count())
