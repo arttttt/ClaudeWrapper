@@ -172,6 +172,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
 
     let proxy_handle = proxy_server.handle();
     let backend_state = proxy_server.backend_state();
+    let subagent_backend_state = proxy_server.subagent_backend();
 
     // Wire history provider: converts SwitchLogEntry → HistoryEntry at the boundary
     {
@@ -553,6 +554,12 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     restart_can_retry = false;
                 }
             }
+            Ok(AppEvent::SetSubagentBackend { backend_id }) => {
+                // 1. Update app UI state
+                app.set_subagent_backend(backend_id.clone());
+                // 2. Update shared proxy state — no PTY restart needed!
+                subagent_backend_state.set(backend_id);
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -668,6 +675,9 @@ async fn run_ui_bridge(
             }
             UiCommand::RestartClaude => {
                 let _ = event_tx.send(AppEvent::RestartClaude);
+            }
+            UiCommand::SetSubagentBackend { backend_id } => {
+                let _ = event_tx.send(AppEvent::SetSubagentBackend { backend_id });
             }
         }
     }
