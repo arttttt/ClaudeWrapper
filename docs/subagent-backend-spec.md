@@ -8,7 +8,7 @@ AnyClaude already has `detect_marker_model()` (`src/proxy/pipeline/routing.rs:80
 
 **Goal:** allow the user to choose a backend for subagents of the main client (not teammates).
 
-**Mechanism:** set `CLAUDE_CODE_SUBAGENT_MODEL=anyclaude-{backend_name}` for the main process → subagents send `"model": "anyclaude-{backend}"` → `detect_marker_model()` routes → `transform` rewrites the model via backend's `model_map`.
+**Mechanism:** set `CLAUDE_CODE_SUBAGENT_MODEL=anyclaude-subagent` once at process start (fixed marker) → subagents send `"model": "anyclaude-subagent"` → `detect_marker_model()` sees the special marker → looks up current subagent backend from shared runtime state (`SubagentBackend`) → routes to that backend → `transform` rewrites the model via backend's `model_map`. Changing subagent backend = updating shared state, **no PTY restart**.
 
 ### How CC Chooses the Subagent Model (reverse engineering v2.1.50+)
 
@@ -43,37 +43,46 @@ function getSubagentModel(config, parentModel, frontmatterModel, permissionMode)
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     AnyClaude (main)                         │
-│                                                              │
-│  config.toml:                                                │
-│    [agent_teams]                                             │
-│    teammate_backend = "cheap-api"                            │
-│    subagent_backend = "cheap-api"  ← NEW                     │
-│                                                              │
-│  env_builder → CLAUDE_CODE_SUBAGENT_MODEL=anyclaude-cheap-api│
-│                                                              │
-│  ┌──────────────────────────┐                                │
-│  │  Claude Code (PTY)       │                                │
-│  │  env: CLAUDE_CODE_       │                                │
-│  │    SUBAGENT_MODEL=       │                                │
-│  │    anyclaude-cheap-api   │                                │
-│  │                          │                                │
-│  │  Main agent → proxy      │──→ active backend (routing.rs) │
-│  │  Subagent  → proxy       │──→ cheap-api (marker model)    │
-│  │  Teammate  → /teammate   │──→ cheap-api (BackendOverride) │
-│  │    └─ Subagent → proxy   │──→ active backend (no marker)  │
-│  └──────────────────────────┘                                │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                     AnyClaude (main)                             │
+│                                                                  │
+│  config.toml:                                                    │
+│    [agent_teams]                                                 │
+│    teammate_backend = "cheap-api"                                │
+│    subagent_backend = "cheap-api"  ← initial value               │
+│                                                                  │
+│  env_builder → CLAUDE_CODE_SUBAGENT_MODEL=anyclaude-subagent     │
+│                (fixed marker, set once at PTY start)             │
+│                                                                  │
+│  SubagentBackend (Arc<RwLock<Option<String>>>)                   │
+│    └─ shared runtime state, updated via UI without PTY restart   │
+│    └─ initialized from config.subagent_backend on start          │
+│                                                                  │
+│  ┌──────────────────────────┐                                    │
+│  │  Claude Code (PTY)       │                                    │
+│  │  env: CLAUDE_CODE_       │                                    │
+│  │    SUBAGENT_MODEL=       │                                    │
+│  │    anyclaude-subagent    │  (always the same fixed marker)    │
+│  │                          │                                    │
+│  │  Main agent → proxy      │──→ active backend (routing.rs)     │
+│  │  Subagent  → proxy       │──→ detect "anyclaude-subagent" →   │
+│  │                          │    read SubagentBackend state →    │
+│  │                          │    route to cheap-api              │
+│  │  Teammate  → /teammate   │──→ cheap-api (BackendOverride)     │
+│  │    └─ Subagent → proxy   │──→ active backend (no marker)      │
+│  └──────────────────────────┘                                    │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 **Subagent request flow:**
-1. CC spawns subagent with `model: "anyclaude-cheap-api"` (from env var)
-2. Subagent makes API request: `POST /v1/messages {"model": "anyclaude-cheap-api", ...}`
-3. `routing.rs::detect_marker_model()` → sees `anyclaude-` prefix → routing decision: `cheap-api`
-4. `transform.rs` → `backend.resolve_model("anyclaude-cheap-api")` → `model_map` → real model
-5. `headers.rs` → auth headers for `cheap-api` backend
-6. `forward.rs` → request goes to upstream URL of `cheap-api` backend
+1. CC spawns subagent with `model: "anyclaude-subagent"` (from env var, fixed)
+2. Subagent makes API request: `POST /v1/messages {"model": "anyclaude-subagent", ...}`
+3. `routing.rs::detect_marker_model()` → sees `"anyclaude-subagent"` → special case
+4. Reads `SubagentBackend` shared state → current value: `"cheap-api"`
+5. Routes to `cheap-api` backend
+6. `transform.rs` → `backend.resolve_model(...)` → `model_map` → real model
+7. `headers.rs` → auth headers for `cheap-api` backend
+8. `forward.rs` → request goes to upstream URL of `cheap-api` backend
 
 ---
 
@@ -90,7 +99,7 @@ pub struct AgentTeamsConfig {
     /// Backend name for teammate requests (must exist in [[backends]]).
     pub teammate_backend: String,
     /// Backend for subagents of the main client (optional).
-    /// Sets CLAUDE_CODE_SUBAGENT_MODEL=anyclaude-{backend} for the main process.
+    /// Used as initial value for SubagentBackend runtime state.
     /// Does NOT affect teammates — CC does not propagate this env var.
     #[serde(default)]
     pub subagent_backend: Option<String>,
@@ -121,29 +130,90 @@ if let Some(ref sb) = at.subagent_backend {
 }
 ```
 
-### 3. EnvSet: `with_subagent_backend` method
+### 3. Shared state: `SubagentBackend`
+
+**File:** `src/backend/state.rs` (or new file `src/proxy/subagent_state.rs`)
+
+```rust
+use std::sync::{Arc, RwLock};
+
+/// Runtime state for subagent backend routing.
+/// Initialized from config on startup, updated via UI (Ctrl+B popup).
+/// Read by detect_marker_model() on every subagent request.
+#[derive(Clone)]
+pub struct SubagentBackend {
+    inner: Arc<RwLock<Option<String>>>,
+}
+
+impl SubagentBackend {
+    pub fn new(initial: Option<String>) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(initial)),
+        }
+    }
+
+    /// Get current subagent backend name.
+    pub fn get(&self) -> Option<String> {
+        self.inner.read().unwrap().clone()
+    }
+
+    /// Set subagent backend. None = disable (inherit parent model).
+    pub fn set(&self, backend: Option<String>) {
+        *self.inner.write().unwrap() = backend;
+    }
+}
+```
+
+### 4. Routing: special case for `anyclaude-subagent`
+
+**File:** `src/proxy/pipeline/routing.rs`
+
+In `detect_marker_model()`, add special case **before** the generic `anyclaude-` prefix handling:
+
+```rust
+// Special marker: subagent routing via runtime state
+if model == "anyclaude-subagent" {
+    if let Some(backend_name) = subagent_state.get() {
+        return Some(RoutingDecision::backend(
+            &backend_name,
+            "subagent marker model",
+        ));
+    }
+    // No subagent backend configured — fall through to default routing
+    return None;
+}
+
+// Generic anyclaude-{backend} handling (existing code)
+if let Some(backend) = model.strip_prefix("anyclaude-") {
+    // ...
+}
+```
+
+`detect_marker_model()` needs access to `SubagentBackend` — add it as a parameter or access via shared state passed to the pipeline context.
+
+### 5. EnvSet: `with_subagent_routing` method
 
 **File:** `src/args/env_builder.rs`
 
 ```rust
-/// Set CLAUDE_CODE_SUBAGENT_MODEL for subagent routing via marker model.
+/// Set CLAUDE_CODE_SUBAGENT_MODEL to the fixed "anyclaude-subagent" marker.
 ///
-/// When set, Claude Code will use "anyclaude-{backend}" as the model name
-/// for all subagents. The proxy's detect_marker_model() will route these
-/// requests to the specified backend, and model_map will rewrite the model
-/// to the real model name before forwarding upstream.
-pub fn with_subagent_backend(mut self, backend: Option<&str>) -> Self {
-    if let Some(name) = backend {
+/// When enabled, Claude Code will use "anyclaude-subagent" as the model name
+/// for all subagents. The proxy's detect_marker_model() will treat this
+/// as a special case and look up the current subagent backend from
+/// shared runtime state (SubagentBackend).
+pub fn with_subagent_routing(mut self, enabled: bool) -> Self {
+    if enabled {
         self.vars.push((
             "CLAUDE_CODE_SUBAGENT_MODEL".into(),
-            format!("anyclaude-{}", name),
+            "anyclaude-subagent".into(),
         ));
     }
     self
 }
 ```
 
-### 4. Pipeline: pass `subagent_backend` through
+### 6. Pipeline: pass `subagent_routing` flag
 
 **File:** `src/args/pipeline.rs`
 
@@ -156,7 +226,7 @@ pub fn build_spawn_params(
     session_token: &str,
     settings: &ClaudeSettingsManager,
     shim: Option<&TeammateShim>,
-    subagent_backend: Option<&str>,  // NEW
+    subagent_routing: bool,  // NEW — just a flag
 ) -> SpawnParams
 ```
 
@@ -168,7 +238,7 @@ let env = EnvSet::new()
     .with_session_token(session_token)
     .with_settings(settings)
     .with_shim(shim)
-    .with_subagent_backend(subagent_backend)  // NEW — before extra
+    .with_subagent_routing(subagent_routing)  // NEW
     .build();
 ```
 
@@ -180,28 +250,36 @@ let env = EnvSet::new()
     .with_session_token(session_token)
     .with_settings(settings)
     .with_shim(shim)
-    .with_subagent_backend(subagent_backend)  // NEW — before extra
+    .with_subagent_routing(subagent_routing)  // NEW
     .with_extra(extra_env)
     .build();
 ```
 
-### 5. Runtime: pass `subagent_backend` on spawn
+### 7. Runtime: initialize shared state, pass flag on spawn
 
 **File:** `src/ui/runtime.rs`
 
-When calling `build_spawn_params` (at the start of `run()`) and `build_restart_params` (in `AppEvent::PtyRestart` handler):
+On startup (in `run()`):
 
 ```rust
-let subagent_backend = config_store.get().agent_teams
+// Initialize subagent backend shared state from config
+let subagent_initial = config_store.get().agent_teams
     .as_ref()
-    .and_then(|at| at.subagent_backend.as_deref());
+    .and_then(|at| at.subagent_backend.clone());
+let subagent_state = SubagentBackend::new(subagent_initial.clone());
+
+// Pass to proxy pipeline context (so detect_marker_model can read it)
+// ... (depends on how pipeline context is structured)
+
+// Determine if subagent routing is enabled (for env var)
+let subagent_routing = subagent_initial.is_some();
 ```
 
-Pass as parameter to `build_spawn_params(..., subagent_backend)` and `build_restart_params(..., subagent_backend)`.
+Pass `subagent_routing` to `build_spawn_params(...)` and `build_restart_params(...)`.
 
-### 6. UI: subagent backend selection in Backend Switch popup (Ctrl+B)
+### 8. UI: subagent backend selection in Backend Switch popup (Ctrl+B)
 
-#### 6a. App state
+#### 8a. App state
 
 **File:** `src/ui/app.rs`
 
@@ -240,7 +318,7 @@ self.subagent_selection = self.backends.iter()
     .unwrap_or(0);
 ```
 
-#### 6b. UiCommand
+#### 8b. UiCommand
 
 **File:** `src/ui/app.rs`
 
@@ -253,7 +331,7 @@ pub enum UiCommand {
 }
 ```
 
-#### 6c. Input handling
+#### 8c. Input handling
 
 **File:** `src/ui/input.rs`
 
@@ -289,7 +367,7 @@ KeyKind::Delete | KeyKind::Backspace => {
 }
 ```
 
-#### 6d. Rendering
+#### 8d. Rendering
 
 **File:** `src/ui/render.rs`
 
@@ -321,32 +399,21 @@ In `PopupKind::BackendSwitch` branch:
 - SubagentBackend section — additional "Disabled" item or `[Selected]` marker on current
 - Updated footer: `"Tab: Section  Up/Down: Move  Enter: Select  Del: Disable  Esc: Close"`
 
-#### 6e. Runtime: handling SetSubagentBackend
+#### 8e. Runtime: handling SetSubagentBackend
 
 **File:** `src/ui/runtime.rs`
 
 ```rust
 UiCommand::SetSubagentBackend { backend_id } => {
-    // 1. Update runtime state
+    // 1. Update app UI state
     app.set_subagent_backend(backend_id.clone());
 
-    // 2. Restart PTY with new CLAUDE_CODE_SUBAGENT_MODEL env var
-    let subagent_backend = backend_id.as_deref();
-    let spawn = build_restart_params(
-        &raw_args,
-        &actual_base_url,
-        &session_token,
-        &settings,
-        _teammate_shim.as_ref(),
-        subagent_backend,
-        vec![],  // no extra env
-        vec![],  // no extra args
-    );
-    respawn_pty(&mut app, spawn, &async_runtime);
+    // 2. Update shared proxy state — no PTY restart needed!
+    subagent_state.set(backend_id);
 }
 ```
 
-**Important:** changing subagent_backend requires a PTY restart because `CLAUDE_CODE_SUBAGENT_MODEL` is an env var read by the Claude Code process at startup. The user will see a brief restart (similar to changing settings).
+Next subagent request from CC will automatically route to the new backend via `detect_marker_model()`.
 
 ---
 
@@ -354,12 +421,10 @@ UiCommand::SetSubagentBackend { backend_id } => {
 
 | File | Reason |
 |------|--------|
-| `src/proxy/pipeline/routing.rs` | `detect_marker_model()` already handles `anyclaude-{backend}` |
 | `src/proxy/pipeline/transform.rs` | `model_map` on backends already rewrites the model |
 | `src/proxy/router.rs` | Routing via main pipeline, no new route needed |
 | `src/shim/tmux.rs` | No shim injection needed (main client only) |
 | `src/ipc/` | No new IPC commands needed (subagent_backend is local state) |
-| `src/backend/state.rs` | No separate locks needed (subagent is not per-pane) |
 
 ---
 
@@ -369,38 +434,41 @@ UiCommand::SetSubagentBackend { backend_id } => {
 - `src/config/types.rs` — new field `subagent_backend: Option<String>`
 - `src/config/loader.rs` — validation
 
-### Commit 2: `feat(args): inject CLAUDE_CODE_SUBAGENT_MODEL env var`
-- `src/args/env_builder.rs` — `with_subagent_backend()` method
-- `src/args/pipeline.rs` — new parameter in `build_spawn_params` and `build_restart_params`
-- `src/ui/runtime.rs` — pass `subagent_backend` from config on spawn and restart
+### Commit 2: `feat(proxy): subagent backend runtime state and routing`
+- `SubagentBackend` shared state (new or in `src/backend/state.rs`)
+- `src/proxy/pipeline/routing.rs` — special case `"anyclaude-subagent"` in `detect_marker_model()`
+- `src/args/env_builder.rs` — `with_subagent_routing()` method
+- `src/args/pipeline.rs` — new `subagent_routing: bool` parameter
+- `src/ui/runtime.rs` — initialize `SubagentBackend` from config, pass to proxy, pass flag to spawn
 
 ### Commit 3: `feat(ui): subagent backend selection in backend popup`
 - `src/ui/app.rs` — state (`BackendPopupSection`, `subagent_selection`, `subagent_backend`), methods, `UiCommand::SetSubagentBackend`
 - `src/ui/input.rs` — Tab sections, Up/Down/Enter/Delete per section
 - `src/ui/render.rs` — two-section popup
-- `src/ui/runtime.rs` — handle `SetSubagentBackend` → PTY restart
+- `src/ui/runtime.rs` — handle `SetSubagentBackend` → update `SubagentBackend` shared state (no restart)
 
 ---
 
 ## Verification
 
 1. **Config:** add `subagent_backend = "openrouter"` to `~/.config/anyclaude/config.toml` → AnyClaude starts without errors
-2. **Env:** check in debug log that `CLAUDE_CODE_SUBAGENT_MODEL=anyclaude-openrouter` is present in PTY process env
+2. **Env:** check in debug log that `CLAUDE_CODE_SUBAGENT_MODEL=anyclaude-subagent` is present in PTY process env (fixed marker, always the same)
 3. **Routing:** launch Claude Code, create subagent (Task tool) → proxy debug log shows: `routing_decision: { backend: "openrouter", reason: "subagent marker model" }`
-4. **Model rewrite:** in forwarded request to upstream — model is rewritten via `model_map` (not `anyclaude-openrouter`)
-5. **UI:** Ctrl+B → two sections, Tab switches, Enter selects → PTY restarts with new env
-6. **Teammates:** check in shim log (`~/.config/anyclaude/tmux_shim.log`) that `CLAUDE_CODE_SUBAGENT_MODEL` is NOT present in send-keys command
-7. **Tests:** `cargo test` — all existing tests pass
-8. **Validation:** `subagent_backend = "nonexistent"` → error on startup
+4. **Model rewrite:** in forwarded request to upstream — model is rewritten via `model_map` (not `anyclaude-subagent`)
+5. **UI:** Ctrl+B → two sections, Tab switches, Enter selects → **no PTY restart**, next subagent request routes to new backend
+6. **Runtime switch:** change subagent backend via Ctrl+B → immediately verify in proxy debug log that next subagent request routes to the new backend
+7. **Teammates:** check in shim log (`~/.config/anyclaude/tmux_shim.log`) that `CLAUDE_CODE_SUBAGENT_MODEL` is NOT present in send-keys command
+8. **Tests:** `cargo test` — all existing tests pass
+9. **Validation:** `subagent_backend = "nonexistent"` → error on startup
 
 ---
 
 ## Limitations and Edge Cases
 
-1. **Changing subagent backend = PTY restart** — unavoidable since the env var is read by the CC process
-2. **Main client only** — teammates do not receive the env var (by design)
-3. **`model_map` is required on the target backend** — if `model_map` is not set, upstream will receive `"model": "anyclaude-openrouter"` and return an error. Either:
-   - Validate that `subagent_backend` has a `model_map` covering `anyclaude-*`
+1. **Main client only** — teammates do not receive the env var (by design)
+2. **`model_map` is required on the target backend** — if `model_map` is not set, upstream will receive the model name as-is and may return an error. Either:
+   - Validate that `subagent_backend` has a `model_map` entry
    - Or document the requirement
-4. **frontmatter `model:` in agents** — if an agent in `.claude/agents/` sets `model: haiku`, CC uses it instead of `CLAUDE_CODE_SUBAGENT_MODEL`. Actually no — env var takes priority, see `getSubagentModel()` above
-5. **`parse()` in CC** — `CLAUDE_CODE_SUBAGENT_MODEL` goes through `parse()` in CC. If CC doesn't recognize `anyclaude-openrouter` as a valid model ID, there could be an issue. Need to verify that `parse()` passes arbitrary strings (not just `opus`/`sonnet`/`haiku`)
+3. **frontmatter `model:` in agents** — env var takes priority over frontmatter, see `getSubagentModel()` above
+4. **`parse()` in CC** — `CLAUDE_CODE_SUBAGENT_MODEL=anyclaude-subagent` goes through `parse()` in CC. Need to verify that `parse()` passes arbitrary strings (not just `opus`/`sonnet`/`haiku`)
+5. **Thread safety** — `SubagentBackend` uses `Arc<RwLock<...>>`, safe for concurrent reads from proxy threads and writes from UI thread
