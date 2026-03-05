@@ -236,11 +236,18 @@ fn handle_backend_switch_by_number(app: &mut App, index: usize) -> InputAction {
 
 /// Handle Enter key in subagent backend section.
 fn handle_subagent_backend_enter(app: &mut App) -> InputAction {
-    let index = app.subagent_selection();
-    // Validate index is within bounds
-    if index < app.backends().len() {
-        app.request_set_subagent_backend(index);
+    let sel = app.subagent_selection();
+    if sel == 0 {
+        // "Disabled" — clear subagent backend
+        app.request_clear_subagent_backend();
         app.close_popup();
+    } else {
+        // Backend at index sel-1
+        let backend_index = sel - 1;
+        if backend_index < app.backends().len() {
+            app.request_set_subagent_backend(backend_index);
+            app.close_popup();
+        }
     }
     InputAction::None
 }

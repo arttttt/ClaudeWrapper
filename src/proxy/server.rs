@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 
 use crate::backend::{BackendState, SubagentBackend};
-use crate::config::{AgentTeamsConfig, ConfigStore};
+use crate::config::{AgentsConfig, ConfigStore};
 use crate::metrics::{DebugLogger, ObservabilityHub};
 use crate::proxy::connection::ConnectionCounter;
 use crate::proxy::pool::PoolConfig;
@@ -21,7 +21,7 @@ pub struct ProxyServer {
     /// Populated by try_bind(), consumed by run().
     listener: Option<TcpListener>,
     router: RouterEngine,
-    agent_teams: Option<AgentTeamsConfig>,
+    agents: Option<AgentsConfig>,
     shutdown: Arc<ShutdownManager>,
     backend_state: BackendState,
     subagent_backend: SubagentBackend,
@@ -42,7 +42,7 @@ impl ProxyServer {
         let backend_state = BackendState::from_config(cfg.clone())?;
 
         // Initialize subagent backend from config
-        let subagent_initial = cfg.agent_teams
+        let subagent_initial = cfg.agents
             .as_ref()
             .and_then(|at| at.subagent_backend.clone());
         let subagent_backend = SubagentBackend::new(subagent_initial);
@@ -64,7 +64,7 @@ impl ProxyServer {
             addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             listener: None,
             router,
-            agent_teams: cfg.agent_teams.clone(),
+            agents: cfg.agents.clone(),
             shutdown: Arc::new(ShutdownManager::new()),
             backend_state,
             subagent_backend,
@@ -161,7 +161,7 @@ impl ProxyServer {
 
         crate::metrics::app_log("proxy", &format!("Starting proxy server on {}", self.addr));
 
-        let app = build_router(self.router.clone(), &self.agent_teams);
+        let app = build_router(self.router.clone(), &self.agents);
         let make_service = app.into_make_service();
         let make_service = ConnectionCounter::new(make_service, self.shutdown.clone());
 

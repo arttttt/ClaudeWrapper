@@ -10,7 +10,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::backend::{BackendState, SubagentBackend};
-use crate::config::{AgentTeamsConfig, DebugLogLevel};
+use crate::config::{AgentsConfig, DebugLogLevel};
 use crate::proxy::error::ErrorResponse;
 use crate::metrics::{DebugLogger, ObservabilityHub, RequestMeta};
 use crate::proxy::health::HealthHandler;
@@ -96,7 +96,7 @@ async fn auth_middleware(
 
 pub fn build_router(
     engine: RouterEngine,
-    teams: &Option<AgentTeamsConfig>,
+    agents: &Option<AgentsConfig>,
 ) -> Router {
     // Main pipeline: auth middleware only (thinking is handled inside the pipeline)
     let main = Router::new()
@@ -122,7 +122,7 @@ pub fn build_router(
     //        is reliably propagated to teammate processes (e.g. via env or CLI flag
     //        instead of tmux shim injection).
     // Teammate pipeline: no session auth (token injection into tmux is unreliable), fixed backend
-    if let Some(config) = teams {
+    if let Some(config) = agents {
         let teammate = Router::new()
             .fallback(proxy_handler)
             .layer(Extension(BackendOverride(

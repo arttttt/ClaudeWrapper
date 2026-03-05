@@ -6,26 +6,26 @@ use std::collections::HashMap;
 /// The `as_str()` value is used as TOML key — once published, do not rename.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SettingId {
-    AgentTeams,
+    Agents,
 }
 
 impl SettingId {
     /// Stable TOML key for persistence.
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::AgentTeams => "agent_teams",
+            Self::Agents => "agents",
         }
     }
 
     /// All variants for iteration.
     pub fn all() -> &'static [SettingId] {
-        &[Self::AgentTeams]
+        &[Self::Agents]
     }
 
     /// Parse from TOML key. Unknown keys return `None` (forward compat).
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "agent_teams" => Some(Self::AgentTeams),
+            "agents" => Some(Self::Agents),
             _ => None,
         }
     }
@@ -220,7 +220,7 @@ pub struct SettingsFieldSnapshot {
 
 fn builtin_registry() -> Vec<SettingDef> {
     vec![SettingDef {
-        id: SettingId::AgentTeams,
+        id: SettingId::Agents,
         label: "Agent Teams",
         description: "Enable multi-agent collaboration (experimental)",
         section: SettingSection::Experimental,

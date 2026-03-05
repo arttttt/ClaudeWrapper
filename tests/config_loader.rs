@@ -1,5 +1,5 @@
 use anyclaude::config::{
-    build_auth_header, AgentTeamsConfig, AuthType, Backend, Config, ConfigError,
+    build_auth_header, AgentsConfig, AuthType, Backend, Config, ConfigError,
     CredentialStatus, DebugLoggingConfig, Defaults, ProxyConfig, TerminalConfig,
 };
 use std::collections::HashMap;
@@ -55,7 +55,7 @@ fn test_validation_fails_empty_backends() {
         debug_logging: DebugLoggingConfig::default(),
         claude_settings: HashMap::new(),
         backends: vec![],
-        agent_teams: None,
+        agents: None,
     };
 
     let result = config.validate();
@@ -88,7 +88,7 @@ fn test_validation_fails_missing_active_backend() {
         debug_logging: DebugLoggingConfig::default(),
         claude_settings: HashMap::new(),
         backends: vec![Backend::default()],
-        agent_teams: None,
+        agents: None,
     };
 
     let result = config.validate();
@@ -300,7 +300,7 @@ fn test_validation_fails_unconfigured_active_backend() {
             model_sonnet: None,
             model_haiku: None,
         }],
-        agent_teams: None,
+        agents: None,
     };
 
     let result = config.validate();
@@ -315,7 +315,7 @@ fn test_validation_fails_unconfigured_active_backend() {
     }
 }
 
-/// Test validation fails when agent_teams.teammate_backend references a nonexistent backend.
+/// Test validation fails when agents.teammate_backend references a nonexistent backend.
 #[test]
 fn test_validation_fails_invalid_teammate_backend() {
     let config = Config {
@@ -325,7 +325,7 @@ fn test_validation_fails_invalid_teammate_backend() {
         debug_logging: DebugLoggingConfig::default(),
         claude_settings: HashMap::new(),
         backends: vec![Backend::default()],
-        agent_teams: Some(AgentTeamsConfig {
+        agents: Some(AgentsConfig {
             teammate_backend: "nonexistent".to_string(),
             subagent_backend: None,
         }),
@@ -343,7 +343,7 @@ fn test_validation_fails_invalid_teammate_backend() {
     }
 }
 
-/// Test validation fails when TOML config has agent_teams with nonexistent backend.
+/// Test validation fails when TOML config has agents with nonexistent backend.
 /// This tests the real user flow: write TOML → parse → validate.
 #[test]
 fn test_validation_fails_invalid_teammate_backend_from_toml() {
@@ -362,7 +362,7 @@ display_name = "Claude"
 base_url = "https://api.anthropic.com"
 auth_type = "passthrough"
 
-[agent_teams]
+[agents]
 teammate_backend = "nonexistent"
 "#,
     )
@@ -374,7 +374,7 @@ teammate_backend = "nonexistent"
     assert!(err.contains("nonexistent"), "got: {err}");
 }
 
-/// Test validation passes when agent_teams.teammate_backend references an existing backend.
+/// Test validation passes when agents.teammate_backend references an existing backend.
 #[test]
 fn test_validation_passes_valid_teammate_backend() {
     let config = Config {
@@ -384,7 +384,7 @@ fn test_validation_passes_valid_teammate_backend() {
         debug_logging: DebugLoggingConfig::default(),
         claude_settings: HashMap::new(),
         backends: vec![Backend::default()],
-        agent_teams: Some(AgentTeamsConfig {
+        agents: Some(AgentsConfig {
             teammate_backend: "claude".to_string(),
             subagent_backend: None,
         }),
@@ -452,7 +452,7 @@ fn test_configured_backends_filters_correctly() {
                 model_haiku: None,
             },
         ],
-        agent_teams: None,
+        agents: None,
     };
 
     let configured = config.configured_backends();

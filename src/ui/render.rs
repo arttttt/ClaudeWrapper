@@ -304,58 +304,69 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                 ]));
                 lines.push(Line::from("  ─────────────────"));
 
-                // Show current subagent backend or "Disabled"
+                // Always show backend list; first item is "Disabled" (inherit).
+                // subagent_selection: 0 = Disabled, 1..N = backends
                 let subagent_backend = app.subagent_backend();
-                if let Some(current) = subagent_backend {
-                    let max_name_width = app.backends()
-                        .iter()
-                        .map(|b| b.display_name.chars().count())
-                        .max()
-                        .unwrap_or(0);
+                let in_section = active_section == BackendPopupSection::SubagentBackend;
+                let sel = app.subagent_selection();
 
-                    for (idx, backend) in app.backends().iter().enumerate() {
-                        let is_selected = active_section == BackendPopupSection::SubagentBackend
-                            && idx == app.subagent_selection();
-                        let is_current = backend.id == current;
-
-                        let base_style = if is_selected {
-                            Style::default().bg(ACTIVE_HIGHLIGHT)
-                        } else {
-                            Style::default()
-                        };
-
-                        let mut spans = Vec::new();
-                        let prefix = if is_selected {
-                            format!("  → {}. ", idx + 1)
-                        } else {
-                            format!("    {}. ", idx + 1)
-                        };
-                        spans.push(Span::styled(prefix, base_style.fg(HEADER_TEXT)));
-                        spans.push(Span::styled(
-                            format!("{:<width$}", backend.display_name, width = max_name_width),
-                            base_style.fg(HEADER_TEXT),
-                        ));
-                        if is_current {
-                            spans.push(Span::styled("  [", base_style));
-                            spans.push(Span::styled("Selected", base_style.fg(STATUS_OK)));
-                            spans.push(Span::styled("]", base_style));
-                        }
-
-                        lines.push(Line::from(spans));
-                    }
-                } else {
-                    // Show "Disabled" option
-                    let is_selected = active_section == BackendPopupSection::SubagentBackend
-                        && app.subagent_selection() == 0;
+                // Item 0: Disabled (use active backend)
+                {
+                    let is_selected = in_section && sel == 0;
+                    let is_current = subagent_backend.is_none();
                     let base_style = if is_selected {
                         Style::default().bg(ACTIVE_HIGHLIGHT)
                     } else {
                         Style::default()
                     };
                     let prefix = if is_selected { "  → " } else { "    " };
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{}Disabled (inherit parent model)", prefix), base_style.fg(HEADER_TEXT)),
-                    ]));
+                    let mut spans = vec![
+                        Span::styled(format!("{}Disabled (use active backend)", prefix), base_style.fg(HEADER_TEXT)),
+                    ];
+                    if is_current {
+                        spans.push(Span::styled("  [", base_style));
+                        spans.push(Span::styled("Active", base_style.fg(STATUS_OK)));
+                        spans.push(Span::styled("]", base_style));
+                    }
+                    lines.push(Line::from(spans));
+                }
+
+                let max_name_width = app.backends()
+                    .iter()
+                    .map(|b| b.display_name.chars().count())
+                    .max()
+                    .unwrap_or(0);
+
+                // Items 1..N: backends
+                for (idx, backend) in app.backends().iter().enumerate() {
+                    let item_index = idx + 1; // offset by 1 because 0 = Disabled
+                    let is_selected = in_section && sel == item_index;
+                    let is_current = subagent_backend == Some(backend.id.as_str());
+
+                    let base_style = if is_selected {
+                        Style::default().bg(ACTIVE_HIGHLIGHT)
+                    } else {
+                        Style::default()
+                    };
+
+                    let mut spans = Vec::new();
+                    let prefix = if is_selected {
+                        format!("  → {}. ", idx + 1)
+                    } else {
+                        format!("    {}. ", idx + 1)
+                    };
+                    spans.push(Span::styled(prefix, base_style.fg(HEADER_TEXT)));
+                    spans.push(Span::styled(
+                        format!("{:<width$}", backend.display_name, width = max_name_width),
+                        base_style.fg(HEADER_TEXT),
+                    ));
+                    if is_current {
+                        spans.push(Span::styled("  [", base_style));
+                        spans.push(Span::styled("Selected", base_style.fg(STATUS_OK)));
+                        spans.push(Span::styled("]", base_style));
+                    }
+
+                    lines.push(Line::from(spans));
                 }
 
                 if let Some(error) = app.last_ipc_error() {

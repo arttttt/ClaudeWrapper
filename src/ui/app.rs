@@ -110,7 +110,7 @@ impl App {
         let settings_saved_snapshot = settings_manager.snapshot_values();
 
         // Initialize subagent_backend from config
-        let subagent_backend = config.get().agent_teams
+        let subagent_backend = config.get().agents
             .as_ref()
             .and_then(|at| at.subagent_backend.clone());
 
@@ -716,16 +716,13 @@ impl App {
     }
 
     /// Move subagent selection by delta (-1 for up, 1 for down).
+    /// Index 0 = "Disabled", 1..N = backends.
     pub fn move_subagent_selection(&mut self, direction: i32) {
-        if self.backends.is_empty() {
-            self.subagent_selection = 0;
-            return;
-        }
-        let len = self.backends.len();
-        let current = self.subagent_selection.min(len.saturating_sub(1));
+        let total = self.backends.len() + 1; // +1 for "Disabled"
+        let current = self.subagent_selection.min(total.saturating_sub(1));
         let next = if direction.is_negative() {
-            if current == 0 { len - 1 } else { current - 1 }
-        } else if current + 1 >= len {
+            if current == 0 { total - 1 } else { current - 1 }
+        } else if current + 1 >= total {
             0
         } else {
             current + 1
@@ -755,10 +752,12 @@ impl App {
     }
 
     /// Reset subagent selection to match current subagent_backend.
+    /// Index 0 = "Disabled", 1..N = backends.
     fn reset_subagent_selection(&mut self) {
         self.subagent_selection = self.subagent_backend
             .as_ref()
             .and_then(|name| self.backends.iter().position(|b| &b.id == name))
+            .map(|idx| idx + 1) // offset: 0=Disabled, 1..N=backends
             .unwrap_or(0);
     }
 }

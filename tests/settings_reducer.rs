@@ -7,7 +7,7 @@ use anyclaude::ui::settings::{SettingsDialogState, SettingsIntent, SettingsReduc
 fn make_fields() -> Vec<SettingsFieldSnapshot> {
     vec![
         SettingsFieldSnapshot {
-            id: SettingId::AgentTeams,
+            id: SettingId::Agents,
             label: "Agent Teams",
             description: "Enable multi-agent collaboration",
             section: SettingSection::Experimental,
