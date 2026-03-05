@@ -429,6 +429,85 @@ fn test_resolve_backend_priority_teammate_over_marker() {
 }
 
 // =============================================================================
+// Stage 2b: subagent session affinity (3-level fallback)
+// =============================================================================
+
+#[test]
+fn test_subagent_marker_ac_marker_wins_over_state() {
+    let config = create_test_config();
+    let backend_state = BackendState::from_config(config).unwrap();
+    // SubagentBackend points to "anthropic", but AC marker says "openrouter"
+    let subagent_backend = SubagentBackend::new(Some("anthropic".into()));
+    let mut ctx = create_test_context();
+
+    let parsed_body = Some(json!({
+        "model": "anyclaude-subagent",
+        "messages": [{"role": "system", "content": "\u{27E8}AC:openrouter\u{27E9}"}]
+    }));
+
+    let backend = pipeline::resolve_backend(
+        &backend_state,
+        &subagent_backend,
+        None,
+        None,
+        parsed_body.as_ref(),
+        &mut ctx,
+    ).unwrap();
+
+    assert_eq!(backend.name, "openrouter");
+}
+
+#[test]
+fn test_subagent_no_marker_falls_back_to_state() {
+    let config = create_test_config();
+    let backend_state = BackendState::from_config(config).unwrap();
+    let subagent_backend = SubagentBackend::new(Some("openrouter".into()));
+    let mut ctx = create_test_context();
+
+    // model=anyclaude-subagent but no AC marker in body
+    let parsed_body = Some(json!({
+        "model": "anyclaude-subagent",
+        "messages": [{"role": "user", "content": "hello"}]
+    }));
+
+    let backend = pipeline::resolve_backend(
+        &backend_state,
+        &subagent_backend,
+        None,
+        None,
+        parsed_body.as_ref(),
+        &mut ctx,
+    ).unwrap();
+
+    assert_eq!(backend.name, "openrouter");
+}
+
+#[test]
+fn test_subagent_no_marker_no_state_falls_back_to_active() {
+    let config = create_test_config();
+    let backend_state = BackendState::from_config(config).unwrap();
+    let subagent_backend = SubagentBackend::new(None);
+    let mut ctx = create_test_context();
+
+    let parsed_body = Some(json!({
+        "model": "anyclaude-subagent",
+        "messages": [{"role": "user", "content": "hello"}]
+    }));
+
+    let backend = pipeline::resolve_backend(
+        &backend_state,
+        &subagent_backend,
+        None,
+        None,
+        parsed_body.as_ref(),
+        &mut ctx,
+    ).unwrap();
+
+    // Falls back to active backend ("test")
+    assert_eq!(backend.name, "test");
+}
+
+// =============================================================================
 // Stage 3: create_thinking tests
 // =============================================================================
 

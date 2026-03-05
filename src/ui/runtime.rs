@@ -79,6 +79,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
         &session_token,
         &settings_manager,
         None, // shim not needed here — we only use session_id from the result
+        None, // proxy_port unknown yet — will be updated after try_bind
     );
     let current_session_id = spawn.session_id.clone();
 
@@ -152,6 +153,14 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     } else {
         None
     };
+
+    // Inject subagent hooks into spawn args now that we know the proxy port.
+    // (build_spawn_params was called with proxy_port=None because port was unknown.)
+    {
+        let assembler = crate::args::ArgAssembler::new()
+            .with_subagent_hooks(actual_addr.port());
+        spawn.args.extend(assembler.build());
+    }
 
     // Inject shim PATH into spawn.env so the first Claude process also uses the shim.
     // (build_spawn_params was called with shim=None because the shim didn't exist yet.)
@@ -229,6 +238,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
 
     // Store base args for restart scenarios (using actual_base_url now that proxy is bound)
     let base_proxy_url = actual_base_url;
+    let proxy_port = actual_addr.port();
 
     for warning in &spawn.warnings {
         app.error_registry().record(
@@ -457,6 +467,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                             &session_token,
                             app.settings_manager(),
                             _teammate_shim.as_ref(),
+                            Some(proxy_port),
                         );
                         respawn_pty(
                             &mut app,
@@ -499,6 +510,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     .with_session_resume(&current_session_id)
                     .with_settings(app.settings_manager())
                     .with_teammate_mode(_teammate_shim.as_ref())
+                    .with_subagent_hooks(proxy_port)
                     .build();
                 let params = SpawnParams {
                     command: "claude".into(),
@@ -533,6 +545,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     _teammate_shim.as_ref(),
                     env_vars,
                     cli_args,
+                    Some(proxy_port),
                 );
                 respawn_pty(
                     &mut app,

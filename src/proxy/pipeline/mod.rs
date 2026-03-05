@@ -23,7 +23,7 @@ pub use extract::extract_request;
 pub use forward::forward_with_retry;
 pub use headers::build_headers;
 pub use response::handle_response;
-pub use routing::resolve_backend;
+pub use routing::{extract_ac_marker, resolve_backend};
 pub use thinking::create_thinking;
 pub use transform::transform_body;
 

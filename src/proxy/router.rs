@@ -4,7 +4,7 @@ use axum::Extension;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -31,6 +31,7 @@ pub struct BackendOverride(pub String);
 pub struct RouterEngine {
     health: Arc<HealthHandler>,
     pub(crate) backend_state: BackendState,
+    pub(crate) subagent_backend: SubagentBackend,
     observability: ObservabilityHub,
     pub(crate) debug_logger: Arc<DebugLogger>,
     pipeline_config: Option<PipelineConfig>,
@@ -50,7 +51,7 @@ impl RouterEngine {
     ) -> Self {
         let pipeline_config = Some(PipelineConfig::new(
             backend_state.clone(),
-            subagent_backend,
+            subagent_backend.clone(),
             transformer_registry.clone(),
             timeout_config,
             pool_config,
@@ -59,6 +60,7 @@ impl RouterEngine {
         Self {
             health: Arc::new(HealthHandler::new()),
             backend_state,
+            subagent_backend,
             observability,
             debug_logger,
             pipeline_config,
@@ -105,9 +107,16 @@ pub fn build_router(
         ))
         .with_state(engine.clone());
 
+    // Hook endpoints don't need auth — they're called by CC hooks via localhost curl.
+    let hook_routes = Router::new()
+        .route("/api/subagent-start", post(crate::proxy::hooks::handle_subagent_start))
+        .route("/api/subagent-stop", post(crate::proxy::hooks::handle_subagent_stop))
+        .with_state(engine.subagent_backend.clone());
+
     let mut router = Router::new()
         .route("/health", get(health_handler))
-        .with_state(engine.clone());
+        .with_state(engine.clone())
+        .merge(hook_routes);
 
     // TODO: restore auth_middleware for teammate pipeline once session token
     //        is reliably propagated to teammate processes (e.g. via env or CLI flag

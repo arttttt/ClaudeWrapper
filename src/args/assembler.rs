@@ -79,6 +79,21 @@ impl ArgAssembler {
         self
     }
 
+    /// Inject SubagentStart/SubagentStop hooks via `--settings` CLI flag.
+    ///
+    /// CC merges these with user settings at runtime. No user files are modified.
+    /// The hooks use curl to POST to the proxy, which returns `additionalContext`
+    /// with a backend marker for session affinity.
+    pub fn with_subagent_hooks(mut self, proxy_port: u16) -> Self {
+        let hooks_json = format!(
+            r#"{{"hooks":{{"SubagentStart":[{{"matcher":"","hooks":[{{"type":"command","command":"curl -s -m 5 -X POST http://127.0.0.1:{port}/api/subagent-start -d @- -H 'Content-Type: application/json'"}}]}}],"SubagentStop":[{{"matcher":"","hooks":[{{"type":"command","command":"curl -s -m 5 -X POST http://127.0.0.1:{port}/api/subagent-stop -d @- -H 'Content-Type: application/json'"}}]}}]}}}}"#,
+            port = proxy_port
+        );
+        self.args.push("--settings".into());
+        self.args.push(hooks_json);
+        self
+    }
+
     /// Add arbitrary extra arguments.
     pub fn with_extra(mut self, extra: Vec<String>) -> Self {
         self.args.extend(extra);

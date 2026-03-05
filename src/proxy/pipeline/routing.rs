@@ -36,7 +36,7 @@ pub fn resolve_backend(
     let marker_backend = parsed_body
         .and_then(|body| body.get("model"))
         .and_then(|m| m.as_str())
-        .and_then(|model| detect_marker_model(model, backend_state, subagent_backend));
+        .and_then(|model| detect_marker_model(model, backend_state, subagent_backend, parsed_body));
 
     // Determine final backend ID with priority:
     // plugin_override > backend_override (teammate) > marker_backend > active_backend
@@ -74,25 +74,72 @@ pub fn resolve_backend(
     Ok(backend)
 }
 
+/// Extract `⟨AC:backend_name⟩` marker from request body.
+///
+/// The marker is injected by the SubagentStart hook into the subagent's
+/// context via `additionalContext`. It appears as a `<system-reminder>`
+/// in the message stream, so we search the serialized body.
+pub fn extract_ac_marker(body: &Value) -> Option<String> {
+    let body_str = body.to_string();
+    let marker_start = "\u{27E8}AC:";
+    let marker_end = '\u{27E9}';
+    let start = body_str.find(marker_start)?;
+    let rest = &body_str[start + marker_start.len()..];
+    let end = rest.find(marker_end)?;
+    let backend = &rest[..end];
+    if !backend.is_empty()
+        && backend
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        Some(backend.to_string())
+    } else {
+        None
+    }
+}
+
 /// Detect subagent marker model and return corresponding backend.
 ///
 /// Marker models are special model names that indicate the request
 /// should be routed to a specific backend regardless of the active backend.
+///
+/// Uses 3-level fallback:
+/// 1. AC marker in request body (session affinity from hook)
+/// 2. SubagentBackend runtime state (current selection)
+/// 3. None (default routing via active backend)
 fn detect_marker_model(
     model: &str,
     backend_state: &BackendState,
     subagent_backend: &SubagentBackend,
+    body: Option<&Value>,
 ) -> Option<String> {
-    // Special marker: subagent routing via runtime state
+    // Special marker: subagent routing
     if model == "anyclaude-subagent" {
-        if let Some(backend_name) = subagent_backend.get() {
+        // 1. Try AC marker from hook-injected additionalContext (session affinity)
+        if let Some(backend_name) = body.and_then(extract_ac_marker) {
             crate::metrics::app_log(
                 "routing",
-                &format!("Detected subagent marker model, routing to backend '{}'", backend_name),
+                &format!(
+                    "Subagent session affinity: routing to pinned backend '{}'",
+                    backend_name
+                ),
             );
             return Some(backend_name);
         }
-        // No subagent backend configured — fall through to default routing
+
+        // 2. Fallback: current SubagentBackend runtime state
+        if let Some(backend_name) = subagent_backend.get() {
+            crate::metrics::app_log(
+                "routing",
+                &format!(
+                    "Subagent marker model: routing to backend '{}' (no session marker)",
+                    backend_name
+                ),
+            );
+            return Some(backend_name);
+        }
+
+        // 3. No subagent backend configured — fall through to default routing
         return None;
     }
 

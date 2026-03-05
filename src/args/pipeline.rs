@@ -45,6 +45,7 @@ pub fn build_spawn_params(
     session_token: &str,
     settings: &ClaudeSettingsManager,
     shim: Option<&TeammateShim>,
+    proxy_port: Option<u16>,
 ) -> SpawnParams {
     let registry = flag_registry();
 
@@ -70,11 +71,14 @@ pub fn build_spawn_params(
         .build();
 
     // Stage 4: Assemble arguments
-    let args = ArgAssembler::from_passthrough(&classified.args)
+    let mut assembler = ArgAssembler::from_passthrough(&classified.args)
         .with_session(&session, session_mode)
         .with_settings(settings)
-        .with_teammate_mode(shim)
-        .build();
+        .with_teammate_mode(shim);
+    if let Some(port) = proxy_port {
+        assembler = assembler.with_subagent_hooks(port);
+    }
+    let args = assembler.build();
 
     // Collect all warnings
     let mut warnings = classified.warnings;
@@ -101,6 +105,7 @@ pub fn build_restart_params(
     shim: Option<&TeammateShim>,
     extra_env: Vec<(String, String)>,
     extra_args: Vec<String>,
+    proxy_port: Option<u16>,
 ) -> SpawnParams {
     let registry = flag_registry();
 
@@ -127,12 +132,14 @@ pub fn build_restart_params(
         .build();
 
     // Stage 4: Assemble arguments (with extra)
-    let args = ArgAssembler::from_passthrough(&classified.args)
+    let mut assembler = ArgAssembler::from_passthrough(&classified.args)
         .with_session(&session, session_mode)
         .with_settings(settings)
-        .with_teammate_mode(shim)
-        .with_extra(extra_args)
-        .build();
+        .with_teammate_mode(shim);
+    if let Some(port) = proxy_port {
+        assembler = assembler.with_subagent_hooks(port);
+    }
+    let args = assembler.with_extra(extra_args).build();
 
     // Collect all warnings
     let mut warnings = classified.warnings;

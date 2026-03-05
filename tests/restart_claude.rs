@@ -306,7 +306,8 @@ fn build_restart_params_with_empty_extras() {
         None, // no shim
         empty_env,
         empty_args,
-    );
+            None,
+);
 
     // Verify we got valid params even with empty extras
     assert!(
