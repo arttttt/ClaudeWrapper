@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::http::{header::{AUTHORIZATION, CONTENT_TYPE}, HeaderMap, Method, Request};
 use serde_json::json;
 
-use anyclaude::backend::BackendState;
+use anyclaude::backend::{BackendState, SubagentRegistry};
 use anyclaude::config::{Backend, Config, DebugLogDestination, DebugLogFormat, DebugLogLevel, DebugLoggingConfig, Defaults};
 use anyclaude::metrics::{BackendOverride, DebugLogger, ObservabilityHub, RequestRecord, RequestSpan};
 use anyclaude::proxy::pipeline::{self, PipelineContext, PipelineConfig};
@@ -121,12 +121,15 @@ fn create_test_context() -> PipelineContext {
 fn create_test_pipeline_config() -> PipelineConfig {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
+
+    let subagent_registry = SubagentRegistry::new();
     let transformer_registry = Arc::new(TransformerRegistry::new());
     let timeout_config = TimeoutConfig::default();
     let pool_config = PoolConfig::default();
 
     PipelineConfig::new(
         backend_state,
+        subagent_registry,
         transformer_registry,
         timeout_config,
         pool_config,
@@ -232,6 +235,8 @@ async fn test_extract_request_no_content_type() {
 fn test_resolve_backend_active_backend() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+
     let mut ctx = create_test_context();
     let parsed_body = Some(json!({"model": "claude-3"}));
 
@@ -240,6 +245,7 @@ fn test_resolve_backend_active_backend() {
         None,
         None,
         parsed_body.as_ref(),
+        &registry,
         &mut ctx,
     ).unwrap();
 
@@ -250,6 +256,8 @@ fn test_resolve_backend_active_backend() {
 fn test_resolve_backend_override() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+
     let mut ctx = create_test_context();
     let parsed_body = Some(json!({"model": "claude-3"}));
 
@@ -258,6 +266,7 @@ fn test_resolve_backend_override() {
         Some("anthropic".to_string()),
         None,
         parsed_body.as_ref(),
+        &registry,
         &mut ctx,
     ).unwrap();
 
@@ -268,6 +277,8 @@ fn test_resolve_backend_override() {
 fn test_resolve_backend_plugin_override() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+
     let mut ctx = create_test_context();
     let parsed_body = Some(json!({"model": "claude-3"}));
 
@@ -281,6 +292,7 @@ fn test_resolve_backend_plugin_override() {
         None,
         Some(plugin_override),
         parsed_body.as_ref(),
+        &registry,
         &mut ctx,
     ).unwrap();
 
@@ -291,6 +303,8 @@ fn test_resolve_backend_plugin_override() {
 fn test_resolve_backend_marker_model() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+
     let mut ctx = create_test_context();
 
     // Use marker- prefix to route to specific backend
@@ -301,6 +315,7 @@ fn test_resolve_backend_marker_model() {
         None,
         None,
         parsed_body.as_ref(),
+        &registry,
         &mut ctx,
     ).unwrap();
 
@@ -311,6 +326,8 @@ fn test_resolve_backend_marker_model() {
 fn test_resolve_backend_anyclaude_prefix() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+
     let mut ctx = create_test_context();
 
     // Use anyclaude- prefix as alternative marker
@@ -321,6 +338,7 @@ fn test_resolve_backend_anyclaude_prefix() {
         None,
         None,
         parsed_body.as_ref(),
+        &registry,
         &mut ctx,
     ).unwrap();
 
@@ -331,6 +349,8 @@ fn test_resolve_backend_anyclaude_prefix() {
 fn test_resolve_backend_direct_backend_name() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+
     let mut ctx = create_test_context();
 
     // Direct backend name as model
@@ -341,6 +361,7 @@ fn test_resolve_backend_direct_backend_name() {
         None,
         None,
         parsed_body.as_ref(),
+        &registry,
         &mut ctx,
     ).unwrap();
 
@@ -351,6 +372,8 @@ fn test_resolve_backend_direct_backend_name() {
 fn test_resolve_backend_missing_backend() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+
     let mut ctx = create_test_context();
 
     // Request a non-existent backend
@@ -359,6 +382,7 @@ fn test_resolve_backend_missing_backend() {
         Some("nonexistent".to_string()),
         None,
         None,
+        &registry,
         &mut ctx,
     );
 
@@ -369,6 +393,8 @@ fn test_resolve_backend_missing_backend() {
 fn test_resolve_backend_priority_plugin_over_teammate() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+
     let mut ctx = create_test_context();
 
     let plugin_override = BackendOverride {
@@ -379,9 +405,10 @@ fn test_resolve_backend_priority_plugin_over_teammate() {
     // Plugin override should win over teammate override
     let backend = pipeline::resolve_backend(
         &backend_state,
-        Some("anthropic".to_string()), // teammate route
+        None,
         Some(plugin_override),
         None,
+        &registry,
         &mut ctx,
     ).unwrap();
 
@@ -392,6 +419,8 @@ fn test_resolve_backend_priority_plugin_over_teammate() {
 fn test_resolve_backend_priority_teammate_over_marker() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+
     let mut ctx = create_test_context();
 
     let parsed_body = Some(json!({"model": "marker-openrouter"}));
@@ -402,10 +431,123 @@ fn test_resolve_backend_priority_teammate_over_marker() {
         Some("anthropic".to_string()), // teammate route
         None,
         parsed_body.as_ref(),
+        &registry,
         &mut ctx,
     ).unwrap();
 
     assert_eq!(backend.name, "anthropic");
+}
+
+// =============================================================================
+// Stage 2b: AC marker session affinity
+// =============================================================================
+
+#[test]
+fn test_ac_marker_routes_to_backend() {
+    let config = create_test_config();
+    let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+    // Register subagent identifier → backend mapping (simulates SubagentStart hook)
+    registry.register("subagent-session-1", "openrouter");
+
+    let mut ctx = create_test_context();
+
+    // AC marker contains the subagent identifier, resolved via registry
+    let parsed_body = Some(json!({
+        "model": "claude-haiku-4-5-20251001",
+        "messages": [{"role": "system", "content": "\u{27E8}AC:subagent-session-1\u{27E9}"}]
+    }));
+
+    let backend = pipeline::resolve_backend(
+        &backend_state,
+        None,
+        None,
+        parsed_body.as_ref(),
+        &registry,
+        &mut ctx,
+    ).unwrap();
+
+    assert_eq!(backend.name, "openrouter");
+}
+
+#[test]
+fn test_no_ac_marker_uses_active_backend() {
+    let config = create_test_config();
+    let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+
+    let mut ctx = create_test_context();
+
+    // No AC marker → should use active backend
+    let parsed_body = Some(json!({
+        "model": "claude-haiku-4-5-20251001",
+        "messages": [{"role": "user", "content": "hello"}]
+    }));
+
+    let backend = pipeline::resolve_backend(
+        &backend_state,
+        None,
+        None,
+        parsed_body.as_ref(),
+        &registry,
+        &mut ctx,
+    ).unwrap();
+
+    // Falls back to active backend ("test")
+    assert_eq!(backend.name, "test");
+}
+
+#[test]
+fn test_ac_marker_wins_over_marker_model() {
+    let config = create_test_config();
+    let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+    registry.register("subagent-session-2", "openrouter");
+
+    let mut ctx = create_test_context();
+
+    // AC marker should win over marker- model prefix
+    let parsed_body = Some(json!({
+        "model": "marker-anthropic",  // would route to anthropic
+        "messages": [{"role": "system", "content": "\u{27E8}AC:subagent-session-2\u{27E9}"}]  // but registry maps to openrouter
+    }));
+
+    let backend = pipeline::resolve_backend(
+        &backend_state,
+        None,
+        None,
+        parsed_body.as_ref(),
+        &registry,
+        &mut ctx,
+    ).unwrap();
+
+    assert_eq!(backend.name, "openrouter");
+}
+
+#[test]
+fn test_ac_marker_unregistered_id_errors() {
+    let config = create_test_config();
+    let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+    // Do NOT register any ID — marker points to unknown subagent
+
+    let mut ctx = create_test_context();
+
+    let parsed_body = Some(json!({
+        "model": "claude-haiku-4-5-20251001",
+        "messages": [{"role": "system", "content": "\u{27E8}AC:unknown-session\u{27E9}"}]
+    }));
+
+    let result = pipeline::resolve_backend(
+        &backend_state,
+        None,
+        None,
+        parsed_body.as_ref(),
+        &registry,
+        &mut ctx,
+    );
+
+    assert!(result.is_err(), "unregistered AC marker must return error, not fallback");
 }
 
 // =============================================================================
@@ -1035,6 +1177,8 @@ fn test_corner_case_invalid_marker_model() {
     // Marker model pointing to non-existent backend should fall through
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
+    let registry = SubagentRegistry::new();
+
     let mut ctx = create_test_context();
 
     // Invalid marker - "nonexistent" is not a valid backend
@@ -1045,6 +1189,7 @@ fn test_corner_case_invalid_marker_model() {
         None,
         None,
         parsed_body.as_ref(),
+        &registry,
         &mut ctx,
     ).unwrap();
 

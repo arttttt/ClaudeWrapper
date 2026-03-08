@@ -18,7 +18,8 @@ fn build_spawn(raw_args: &[String]) -> anyclaude::args::SpawnParams {
         "test-session-token",
         &ClaudeSettingsManager::new(),
         None,
-    )
+            None,
+)
 }
 
 // =============================================================================
@@ -174,7 +175,8 @@ fn resume_appends_extra_args() {
         None,
         vec![],
         extra,
-    );
+            None,
+);
     assert!(p.args.contains(&"--verbose".to_string()));
     assert!(p.args.contains(&"--resume".to_string()));
 }
@@ -201,7 +203,8 @@ fn restart_merges_extra_env() {
         None,
         extra_env,
         vec![],
-    );
+            None,
+);
     assert!(p.env.iter().any(|(k, _)| k == "ANTHROPIC_BASE_URL"));
     assert!(p.env.iter().any(|(k, v)| k == "FOO" && v == "1"));
 }

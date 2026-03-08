@@ -48,7 +48,7 @@ fn create_test_config() -> Config {
                 model_haiku: None,
             },
         ],
-        agent_teams: None,
+        agents: None,
     }
 }
 

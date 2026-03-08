@@ -21,7 +21,8 @@ fn spawn_env_contains_custom_headers_with_session_token() {
         session_token,
         &ClaudeSettingsManager::new(),
         None,
-    );
+            None,
+);
 
     // Check that ANTHROPIC_CUSTOM_HEADERS contains the session token
     let custom_headers = params
@@ -61,7 +62,8 @@ fn restart_env_contains_custom_headers_with_session_token() {
         None,
         vec![],
         vec![],
-    );
+            None,
+);
 
     // Check that ANTHROPIC_CUSTOM_HEADERS contains the session token
     let custom_headers = params
@@ -116,7 +118,8 @@ fn spawn_env_has_all_required_vars() {
         session_token,
         &ClaudeSettingsManager::new(),
         None,
-    );
+            None,
+);
 
     // Should have ANTHROPIC_BASE_URL
     assert!(
@@ -146,7 +149,8 @@ fn restart_env_has_all_required_vars() {
         None,
         vec![],
         vec![],
-    );
+            None,
+);
 
     // Should have ANTHROPIC_BASE_URL
     assert!(

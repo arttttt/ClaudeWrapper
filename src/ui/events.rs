@@ -74,6 +74,8 @@ pub enum AppEvent {
     },
     /// Claude Code restart requested (Ctrl+R) — resume current session.
     RestartClaude,
+    /// Subagent backend changed (no PTY restart needed).
+    SetSubagentBackend { backend_id: Option<String> },
 }
 
 pub struct EventHandler {

@@ -15,9 +15,9 @@ pub struct Config {
     #[serde(default)]
     pub claude_settings: HashMap<String, bool>,
     pub backends: Vec<Backend>,
-    /// Agent Teams routing configuration.
+    /// Agents routing configuration.
     #[serde(default)]
-    pub agent_teams: Option<AgentTeamsConfig>,
+    pub agents: Option<AgentsConfig>,
 }
 
 /// Default settings for the application.
@@ -245,11 +245,16 @@ pub struct BackendPricing {
     pub output_per_million: f64,
 }
 
-/// Agent Teams routing configuration.
+/// Agents routing configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentTeamsConfig {
+pub struct AgentsConfig {
     /// Backend name for teammate requests (must exist in [[backends]]).
     pub teammate_backend: String,
+    /// Backend for subagents of the main client (optional).
+    /// Used as initial value for SubagentBackend runtime state.
+    /// Does NOT affect teammates — CC does not propagate this env var.
+    #[serde(default)]
+    pub subagent_backend: Option<String>,
 }
 
 impl Default for Backend {
@@ -294,7 +299,7 @@ impl Default for Config {
             debug_logging: DebugLoggingConfig::default(),
             claude_settings: HashMap::new(),
             backends: vec![Backend::default()],
-            agent_teams: None,
+            agents: None,
         }
     }
 }

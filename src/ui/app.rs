@@ -22,6 +22,13 @@ pub enum PopupKind {
     Settings,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub enum BackendPopupSection {
+    #[default]
+    ActiveBackend,
+    SubagentBackend,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Focus {
     Terminal,
@@ -31,6 +38,7 @@ pub enum Focus {
 #[derive(Debug)]
 pub enum UiCommand {
     SwitchBackend { backend_id: String },
+    SetSubagentBackend { backend_id: Option<String> },
     RestartClaude,
     RefreshStatus,
     RefreshMetrics { backend_id: Option<String> },
@@ -86,6 +94,12 @@ pub struct App {
     pty_generation: u64,
     /// Current mouse text selection (None when nothing is selected).
     selection: Option<TextSelection>,
+    /// Which section of backend popup is focused.
+    backend_popup_section: BackendPopupSection,
+    /// Selection index for subagent backend list.
+    subagent_selection: usize,
+    /// Current subagent backend (runtime state, from config on start).
+    subagent_backend: Option<String>,
 }
 
 impl App {
@@ -94,6 +108,12 @@ impl App {
         let mut settings_manager = ClaudeSettingsManager::new();
         settings_manager.load_from_toml(&config.get().claude_settings);
         let settings_saved_snapshot = settings_manager.snapshot_values();
+
+        // Initialize subagent_backend from config
+        let subagent_backend = config.get().agents
+            .as_ref()
+            .and_then(|at| at.subagent_backend.clone());
+
         Self {
             should_quit: false,
             focus: Focus::Terminal,
@@ -118,6 +138,9 @@ impl App {
             settings_saved_snapshot,
             pty_generation: 0,
             selection: None,
+            backend_popup_section: BackendPopupSection::default(),
+            subagent_selection: 0,
+            subagent_backend,
         }
     }
 
@@ -653,6 +676,8 @@ impl App {
 
     fn reset_backend_selection(&mut self) {
         self.backend_selection = self.active_backend_index().unwrap_or(0);
+        self.backend_popup_section = BackendPopupSection::ActiveBackend;
+        self.reset_subagent_selection();
     }
 
     fn clamp_backend_selection(&mut self) {
@@ -668,6 +693,72 @@ impl App {
 
     fn active_backend_index(&self) -> Option<usize> {
         self.backends.iter().position(|backend| backend.is_active)
+    }
+
+    // --- Subagent Backend Methods ---
+
+    /// Toggle between ActiveBackend and SubagentBackend sections in popup.
+    pub fn toggle_backend_popup_section(&mut self) {
+        self.backend_popup_section = match self.backend_popup_section {
+            BackendPopupSection::ActiveBackend => BackendPopupSection::SubagentBackend,
+            BackendPopupSection::SubagentBackend => BackendPopupSection::ActiveBackend,
+        };
+    }
+
+    /// Get current backend popup section.
+    pub fn backend_popup_section(&self) -> BackendPopupSection {
+        self.backend_popup_section
+    }
+
+    /// Get subagent selection index.
+    pub fn subagent_selection(&self) -> usize {
+        self.subagent_selection
+    }
+
+    /// Move subagent selection by delta (-1 for up, 1 for down).
+    /// Index 0 = "Disabled", 1..N = backends.
+    pub fn move_subagent_selection(&mut self, direction: i32) {
+        let total = self.backends.len() + 1; // +1 for "Disabled"
+        let current = self.subagent_selection.min(total.saturating_sub(1));
+        let next = if direction.is_negative() {
+            if current == 0 { total - 1 } else { current - 1 }
+        } else if current + 1 >= total {
+            0
+        } else {
+            current + 1
+        };
+        self.subagent_selection = next;
+    }
+
+    /// Request to set subagent backend by index.
+    pub fn request_set_subagent_backend(&mut self, index: usize) {
+        let backend_id = self.backends.get(index).map(|b| b.id.clone());
+        self.send_command(UiCommand::SetSubagentBackend { backend_id });
+    }
+
+    /// Clear subagent backend (set to None).
+    pub fn request_clear_subagent_backend(&mut self) {
+        self.send_command(UiCommand::SetSubagentBackend { backend_id: None });
+    }
+
+    /// Set subagent backend from UI command handler.
+    pub fn set_subagent_backend(&mut self, backend_id: Option<String>) {
+        self.subagent_backend = backend_id;
+    }
+
+    /// Get current subagent backend.
+    pub fn subagent_backend(&self) -> Option<&str> {
+        self.subagent_backend.as_deref()
+    }
+
+    /// Reset subagent selection to match current subagent_backend.
+    /// Index 0 = "Disabled", 1..N = backends.
+    fn reset_subagent_selection(&mut self) {
+        self.subagent_selection = self.subagent_backend
+            .as_ref()
+            .and_then(|name| self.backends.iter().position(|b| &b.id == name))
+            .map(|idx| idx + 1) // offset: 0=Disabled, 1..N=backends
+            .unwrap_or(0);
     }
 }
 

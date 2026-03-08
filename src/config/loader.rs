@@ -129,14 +129,24 @@ impl Config {
             }
         }
 
-        if let Some(ref at) = self.agent_teams {
+        if let Some(ref at) = self.agents {
             if !self.backends.iter().any(|b| b.name == at.teammate_backend) {
                 return Err(ConfigError::ValidationError {
                     message: format!(
-                        "agent_teams.teammate_backend '{}' not found in configured backends",
+                        "agents.teammate_backend '{}' not found in configured backends",
                         at.teammate_backend
                     ),
                 });
+            }
+            if let Some(ref sb) = at.subagent_backend {
+                if !self.backends.iter().any(|b| b.name == *sb) {
+                    return Err(ConfigError::ValidationError {
+                        message: format!(
+                            "agents.subagent_backend '{}' not found in configured backends",
+                            sb
+                        ),
+                    });
+                }
             }
         }
 

@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use tokio::net::TcpListener;
 
-use crate::backend::BackendState;
-use crate::config::{AgentTeamsConfig, ConfigStore};
+use crate::backend::{BackendState, SubagentBackend, SubagentRegistry};
+use crate::config::{AgentsConfig, ConfigStore};
 use crate::metrics::{DebugLogger, ObservabilityHub};
 use crate::proxy::connection::ConnectionCounter;
 use crate::proxy::pool::PoolConfig;
@@ -21,9 +21,10 @@ pub struct ProxyServer {
     /// Populated by try_bind(), consumed by run().
     listener: Option<TcpListener>,
     router: RouterEngine,
-    agent_teams: Option<AgentTeamsConfig>,
+    agents: Option<AgentsConfig>,
     shutdown: Arc<ShutdownManager>,
     backend_state: BackendState,
+    subagent_backend: SubagentBackend,
     observability: ObservabilityHub,
     debug_logger: Arc<DebugLogger>,
     transformer_registry: Arc<TransformerRegistry>,
@@ -39,6 +40,14 @@ impl ProxyServer {
         let timeout_config = TimeoutConfig::from(&cfg.defaults);
         let pool_config = PoolConfig::from(&cfg.defaults);
         let backend_state = BackendState::from_config(cfg.clone())?;
+
+        // Initialize subagent backend from config
+        let subagent_initial = cfg.agents
+            .as_ref()
+            .and_then(|at| at.subagent_backend.clone());
+        let subagent_backend = SubagentBackend::new(subagent_initial);
+        let subagent_registry = SubagentRegistry::new();
+
         let observability = ObservabilityHub::new(1000)
             .with_plugins(vec![debug_logger.clone()]);
         let transformer_registry = Arc::new(TransformerRegistry::new());
@@ -46,6 +55,8 @@ impl ProxyServer {
             timeout_config,
             pool_config,
             backend_state.clone(),
+            subagent_backend.clone(),
+            subagent_registry.clone(),
             observability.clone(),
             debug_logger.clone(),
             transformer_registry.clone(),
@@ -55,9 +66,10 @@ impl ProxyServer {
             addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             listener: None,
             router,
-            agent_teams: cfg.agent_teams.clone(),
+            agents: cfg.agents.clone(),
             shutdown: Arc::new(ShutdownManager::new()),
             backend_state,
+            subagent_backend,
             observability,
             debug_logger,
             transformer_registry,
@@ -115,6 +127,10 @@ impl ProxyServer {
         self.backend_state.clone()
     }
 
+    pub fn subagent_backend(&self) -> SubagentBackend {
+        self.subagent_backend.clone()
+    }
+
     pub fn observability(&self) -> ObservabilityHub {
         self.observability.clone()
     }
@@ -147,7 +163,7 @@ impl ProxyServer {
 
         crate::metrics::app_log("proxy", &format!("Starting proxy server on {}", self.addr));
 
-        let app = build_router(self.router.clone(), &self.agent_teams);
+        let app = build_router(self.router.clone(), &self.agents);
         let make_service = app.into_make_service();
         let make_service = ConnectionCounter::new(make_service, self.shutdown.clone());
 

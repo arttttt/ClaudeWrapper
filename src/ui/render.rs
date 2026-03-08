@@ -231,19 +231,24 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                 ("Network Diagnostics", lines)
             }
             PopupKind::BackendSwitch => {
+                use crate::ui::app::BackendPopupSection;
                 let mut lines = Vec::new();
-                if app.backends().is_empty() {
-                    lines.push(Line::from("    No backends available."));
-                } else {
-                    let selected_index = app.backend_selection();
-                    let max_name_width = app
-                        .backends()
+                let active_section = app.backend_popup_section();
+
+                // Helper to format backend list
+                let format_backend_list = |backends: &[crate::ipc::BackendInfo], selected_idx: usize, active_section: bool| -> Vec<Line<'static>> {
+                    if backends.is_empty() {
+                        return vec![Line::from("    No backends available.")];
+                    }
+
+                    let max_name_width = backends
                         .iter()
-                        .map(|backend| backend.display_name.chars().count())
+                        .map(|b| b.display_name.chars().count())
                         .max()
                         .unwrap_or(0);
 
-                    for (idx, backend) in app.backends().iter().enumerate() {
+                    let mut result = Vec::new();
+                    for (idx, backend) in backends.iter().enumerate() {
                         let (status_text, status_color) = if backend.is_active {
                             ("Active", STATUS_OK)
                         } else if backend.is_configured {
@@ -251,10 +256,8 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                         } else {
                             ("Missing", STATUS_ERROR)
                         };
-                        let is_selected = idx == selected_index;
+                        let is_selected = active_section && idx == selected_idx;
 
-                        // Apply highlight background to all spans when selected
-                        // (Line::style() doesn't propagate bg to pre-styled spans)
                         let base_style = if is_selected {
                             Style::default().bg(ACTIVE_HIGHLIGHT)
                         } else {
@@ -276,9 +279,94 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
                         spans.push(Span::styled(status_text, base_style.fg(status_color)));
                         spans.push(Span::styled("]", base_style));
 
-                        lines.push(Line::from(spans));
+                        result.push(Line::from(spans));
+                    }
+                    result
+                };
+
+                // --- Active Backend Section ---
+                let active_header_marker = if active_section == BackendPopupSection::ActiveBackend { "▸ " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{}Active Backend", active_header_marker), Style::default().bold()),
+                ]));
+                lines.push(Line::from("  ─────────────────"));
+                lines.extend(format_backend_list(
+                    app.backends(),
+                    app.backend_selection(),
+                    active_section == BackendPopupSection::ActiveBackend,
+                ));
+
+                // --- Subagent Backend Section ---
+                lines.push(Line::from(""));
+                let subagent_header_marker = if active_section == BackendPopupSection::SubagentBackend { "▸ " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{}Subagent Backend", subagent_header_marker), Style::default().bold()),
+                ]));
+                lines.push(Line::from("  ─────────────────"));
+
+                // Always show backend list; first item is "Disabled" (inherit).
+                // subagent_selection: 0 = Disabled, 1..N = backends
+                let subagent_backend = app.subagent_backend();
+                let in_section = active_section == BackendPopupSection::SubagentBackend;
+                let sel = app.subagent_selection();
+
+                // Item 0: Disabled (use active backend)
+                {
+                    let is_selected = in_section && sel == 0;
+                    let is_current = subagent_backend.is_none();
+                    let base_style = if is_selected {
+                        Style::default().bg(ACTIVE_HIGHLIGHT)
+                    } else {
+                        Style::default()
+                    };
+                    let prefix = if is_selected { "  → " } else { "    " };
+                    let mut spans = vec![
+                        Span::styled(format!("{}Disabled (use active backend)", prefix), base_style.fg(HEADER_TEXT)),
+                    ];
+                    if is_current {
+                        spans.push(Span::styled("  [", base_style));
+                        spans.push(Span::styled("Active", base_style.fg(STATUS_OK)));
+                        spans.push(Span::styled("]", base_style));
+                    }
+                    lines.push(Line::from(spans));
+                }
+
+                let max_name_width = app.backends()
+                    .iter()
+                    .map(|b| b.display_name.chars().count())
+                    .max()
+                    .unwrap_or(0);
+
+                // Items 1..N: backends
+                for (idx, backend) in app.backends().iter().enumerate() {
+                    let item_index = idx + 1; // offset by 1 because 0 = Disabled
+                    let is_selected = in_section && sel == item_index;
+                    let is_current = subagent_backend == Some(backend.id.as_str());
+
+                    let base_style = if is_selected {
+                        Style::default().bg(ACTIVE_HIGHLIGHT)
+                    } else {
+                        Style::default()
+                    };
+
+                    let mut spans = Vec::new();
+                    let prefix = if is_selected {
+                        format!("  → {}. ", idx + 1)
+                    } else {
+                        format!("    {}. ", idx + 1)
+                    };
+                    spans.push(Span::styled(prefix, base_style.fg(HEADER_TEXT)));
+                    spans.push(Span::styled(
+                        format!("{:<width$}", backend.display_name, width = max_name_width),
+                        base_style.fg(HEADER_TEXT),
+                    ));
+                    if is_current {
+                        spans.push(Span::styled("  [", base_style));
+                        spans.push(Span::styled("Selected", base_style.fg(STATUS_OK)));
+                        spans.push(Span::styled("]", base_style));
                     }
 
+                    lines.push(Line::from(spans));
                 }
 
                 if let Some(error) = app.last_ipc_error() {
@@ -299,7 +387,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             PopupKind::BackendSwitch => {
                 dialog = dialog
                     .min_width(60)
-                    .footer("Up/Down: Move  Enter: Select  Esc/Ctrl+B: Close");
+                    .footer("Tab: Section  Up/Down: Move  Enter: Select  Del: Clear  Esc: Close");
             }
             PopupKind::History | PopupKind::Settings => unreachable!(),
         }

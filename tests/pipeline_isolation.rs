@@ -7,7 +7,7 @@
 mod common;
 
 use anyclaude::config::{
-    AgentTeamsConfig, Backend, Config, ConfigStore, DebugLoggingConfig, Defaults, ProxyConfig,
+    AgentsConfig, Backend, Config, ConfigStore, DebugLoggingConfig, Defaults, ProxyConfig,
     TerminalConfig,
 };
 use anyclaude::metrics::DebugLogger;
@@ -38,7 +38,7 @@ fn create_backend(name: &str, base_url: &str) -> Backend {
 fn config_with_teams(
     backends: Vec<Backend>,
     bind_addr: &str,
-    agent_teams: Option<AgentTeamsConfig>,
+    agents: Option<AgentsConfig>,
 ) -> Config {
     Config {
         defaults: Defaults {
@@ -59,7 +59,7 @@ fn config_with_teams(
         debug_logging: DebugLoggingConfig::default(),
         claude_settings: HashMap::new(),
         backends,
-        agent_teams,
+        agents,
     }
 }
 
@@ -106,7 +106,7 @@ async fn main_pipeline_routes_to_active_backend() {
             create_backend("teammate", &mock_teammate.base_url()),
         ],
         &format!("127.0.0.1:{}", common::free_port()),
-        Some(AgentTeamsConfig { teammate_backend: "teammate".to_string() }),
+        Some(AgentsConfig { teammate_backend: "teammate".to_string(), subagent_backend: None }),
     );
     let h = TestHarness::start(config).await;
 
@@ -136,7 +136,7 @@ async fn teammate_pipeline_routes_to_teammate_backend() {
             create_backend("teammate", &mock_teammate.base_url()),
         ],
         &format!("127.0.0.1:{}", common::free_port()),
-        Some(AgentTeamsConfig { teammate_backend: "teammate".to_string() }),
+        Some(AgentsConfig { teammate_backend: "teammate".to_string(), subagent_backend: None }),
     );
     let h = TestHarness::start(config).await;
 
@@ -165,7 +165,7 @@ async fn teammate_path_stripped_before_forwarding() {
             create_backend("teammate", &mock_teammate.base_url()),
         ],
         &format!("127.0.0.1:{}", common::free_port()),
-        Some(AgentTeamsConfig { teammate_backend: "teammate".to_string() }),
+        Some(AgentsConfig { teammate_backend: "teammate".to_string(), subagent_backend: None }),
     );
     let h = TestHarness::start(config).await;
 
@@ -191,7 +191,7 @@ async fn teammate_preserves_query_string() {
             create_backend("teammate", &mock_teammate.base_url()),
         ],
         &format!("127.0.0.1:{}", common::free_port()),
-        Some(AgentTeamsConfig { teammate_backend: "teammate".to_string() }),
+        Some(AgentsConfig { teammate_backend: "teammate".to_string(), subagent_backend: None }),
     );
     let h = TestHarness::start(config).await;
 
@@ -223,7 +223,7 @@ async fn teammates_with_trailing_s_routes_to_main_not_teammate() {
             create_backend("teammate", &mock_teammate.base_url()),
         ],
         &format!("127.0.0.1:{}", common::free_port()),
-        Some(AgentTeamsConfig { teammate_backend: "teammate".to_string() }),
+        Some(AgentsConfig { teammate_backend: "teammate".to_string(), subagent_backend: None }),
     );
     let h = TestHarness::start(config).await;
 
@@ -255,7 +255,7 @@ async fn bare_teammate_prefix_returns_404() {
             create_backend("teammate", &mock_teammate.base_url()),
         ],
         &format!("127.0.0.1:{}", common::free_port()),
-        Some(AgentTeamsConfig { teammate_backend: "teammate".to_string() }),
+        Some(AgentsConfig { teammate_backend: "teammate".to_string(), subagent_backend: None }),
     );
     let h = TestHarness::start(config).await;
 
@@ -273,18 +273,18 @@ async fn bare_teammate_prefix_returns_404() {
 }
 
 // ---------------------------------------------------------------------------
-// No agent_teams → no /teammate route
+// No agents → no /teammate route
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn no_agent_teams_returns_404_on_teammate_path() {
+async fn no_agents_returns_404_on_teammate_path() {
     let mock = MockBackend::start().await;
     mock.enqueue_response(MockResponse::json(r#"{"ok":true}"#)).await;
 
     let config = config_with_teams(
         vec![create_backend("main", &mock.base_url())],
         &format!("127.0.0.1:{}", common::free_port()),
-        None, // no agent_teams
+        None, // no agents
     );
     let h = TestHarness::start(config).await;
 
@@ -322,7 +322,7 @@ async fn concurrent_main_and_teammate_route_correctly() {
             create_backend("teammate", &mock_teammate.base_url()),
         ],
         &format!("127.0.0.1:{}", common::free_port()),
-        Some(AgentTeamsConfig { teammate_backend: "teammate".to_string() }),
+        Some(AgentsConfig { teammate_backend: "teammate".to_string(), subagent_backend: None }),
     );
     let h = TestHarness::start(config).await;
     let h = Arc::new(h);
@@ -381,7 +381,7 @@ async fn teammate_requests_dont_increment_thinking_session() {
             create_backend("teammate", &mock_teammate.base_url()),
         ],
         &format!("127.0.0.1:{}", common::free_port()),
-        Some(AgentTeamsConfig { teammate_backend: "teammate".to_string() }),
+        Some(AgentsConfig { teammate_backend: "teammate".to_string(), subagent_backend: None }),
     );
     let config_store = ConfigStore::new(config, PathBuf::from("/tmp/test.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));
@@ -445,7 +445,7 @@ async fn teammate_sse_streaming_works() {
             create_backend("teammate", &mock_teammate.base_url()),
         ],
         &format!("127.0.0.1:{}", common::free_port()),
-        Some(AgentTeamsConfig { teammate_backend: "teammate".to_string() }),
+        Some(AgentsConfig { teammate_backend: "teammate".to_string(), subagent_backend: None }),
     );
     let h = TestHarness::start(config).await;
 
@@ -487,7 +487,7 @@ async fn backend_switch_doesnt_affect_teammate_routing() {
             create_backend("teammate", &mock_teammate.base_url()),
         ],
         &format!("127.0.0.1:{}", common::free_port()),
-        Some(AgentTeamsConfig { teammate_backend: "teammate".to_string() }),
+        Some(AgentsConfig { teammate_backend: "teammate".to_string(), subagent_backend: None }),
     );
     let config_store = ConfigStore::new(config, PathBuf::from("/tmp/test.toml"));
     let debug_logger = Arc::new(DebugLogger::new(Default::default()));

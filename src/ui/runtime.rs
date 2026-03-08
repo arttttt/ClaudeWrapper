@@ -79,6 +79,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
         &session_token,
         &settings_manager,
         None, // shim not needed here — we only use session_id from the result
+        None, // proxy_port unknown yet — will be updated after try_bind
     );
     let current_session_id = spawn.session_id.clone();
 
@@ -131,9 +132,9 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
         }
     }
 
-    // Create teammate shim if agent_teams routing is configured.
+    // Create teammate shim if agents routing is configured.
     // The shim must stay alive for the entire session (owns a temp directory).
-    let _teammate_shim = if config_store.get().agent_teams.is_some() {
+    let _teammate_shim = if config_store.get().agents.is_some() {
         let log_enabled = config_store.get().debug_logging.level != crate::config::DebugLogLevel::Off;
         match TeammateShim::create(actual_addr.port(), &session_token, log_enabled) {
             Ok(shim) => {
@@ -153,6 +154,14 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
         None
     };
 
+    // Inject subagent hooks into spawn args now that we know the proxy port.
+    // (build_spawn_params was called with proxy_port=None because port was unknown.)
+    {
+        let assembler = crate::args::ArgAssembler::new()
+            .with_subagent_hooks(actual_addr.port());
+        spawn.args.extend(assembler.build());
+    }
+
     // Inject shim PATH into spawn.env so the first Claude process also uses the shim.
     // (build_spawn_params was called with shim=None because the shim didn't exist yet.)
     if let Some(ref shim) = _teammate_shim {
@@ -166,6 +175,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
 
     let proxy_handle = proxy_server.handle();
     let backend_state = proxy_server.backend_state();
+    let subagent_backend_state = proxy_server.subagent_backend();
 
     // Wire history provider: converts SwitchLogEntry → HistoryEntry at the boundary
     {
@@ -228,6 +238,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
 
     // Store base args for restart scenarios (using actual_base_url now that proxy is bound)
     let base_proxy_url = actual_base_url;
+    let proxy_port = actual_addr.port();
 
     for warning in &spawn.warnings {
         app.error_registry().record(
@@ -456,6 +467,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                             &session_token,
                             app.settings_manager(),
                             _teammate_shim.as_ref(),
+                            Some(proxy_port),
                         );
                         respawn_pty(
                             &mut app,
@@ -497,6 +509,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     .with_session_resume(&current_session_id)
                     .with_settings(app.settings_manager())
                     .with_teammate_mode(_teammate_shim.as_ref())
+                    .with_subagent_hooks(proxy_port)
                     .build();
                 let params = SpawnParams {
                     command: "claude".into(),
@@ -531,6 +544,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     _teammate_shim.as_ref(),
                     env_vars,
                     cli_args,
+                    Some(proxy_port),
                 );
                 respawn_pty(
                     &mut app,
@@ -543,6 +557,12 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                     // Spawn failed immediately — no point retrying.
                     restart_can_retry = false;
                 }
+            }
+            Ok(AppEvent::SetSubagentBackend { backend_id }) => {
+                // 1. Update app UI state
+                app.set_subagent_backend(backend_id.clone());
+                // 2. Update shared proxy state — no PTY restart needed!
+                subagent_backend_state.set(backend_id);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -659,6 +679,9 @@ async fn run_ui_bridge(
             }
             UiCommand::RestartClaude => {
                 let _ = event_tx.send(AppEvent::RestartClaude);
+            }
+            UiCommand::SetSubagentBackend { backend_id } => {
+                let _ = event_tx.send(AppEvent::SetSubagentBackend { backend_id });
             }
         }
     }

@@ -1,4 +1,4 @@
-use crate::ui::app::{App, PopupKind};
+use crate::ui::app::{App, BackendPopupSection, PopupKind};
 use crate::ui::history::HistoryIntent;
 use crate::ui::settings::SettingsIntent;
 use term_input::{Direction, KeyInput, KeyKind};
@@ -134,19 +134,47 @@ fn handle_backend_switch_key(app: &mut App, key: &KeyInput) -> InputAction {
         KeyKind::Control('s') | KeyKind::Control('h') => {
             app.close_popup();
         }
+        KeyKind::Tab => {
+            app.toggle_backend_popup_section();
+        }
         KeyKind::Arrow(Direction::Up) => {
-            app.move_backend_selection(-1);
+            match app.backend_popup_section() {
+                BackendPopupSection::ActiveBackend => app.move_backend_selection(-1),
+                BackendPopupSection::SubagentBackend => app.move_subagent_selection(-1),
+            }
         }
         KeyKind::Arrow(Direction::Down) => {
-            app.move_backend_selection(1);
+            match app.backend_popup_section() {
+                BackendPopupSection::ActiveBackend => app.move_backend_selection(1),
+                BackendPopupSection::SubagentBackend => app.move_subagent_selection(1),
+            }
         }
         KeyKind::Enter => {
-            return handle_backend_switch_enter(app);
+            match app.backend_popup_section() {
+                BackendPopupSection::ActiveBackend => return handle_backend_switch_enter(app),
+                BackendPopupSection::SubagentBackend => return handle_subagent_backend_enter(app),
+            }
+        }
+        KeyKind::Backspace | KeyKind::Nav(term_input::NavKey::Delete) => {
+            if app.backend_popup_section() == BackendPopupSection::SubagentBackend {
+                app.request_clear_subagent_backend();
+                app.close_popup();
+            }
         }
         KeyKind::Char(ch) if ch.is_ascii_digit() => {
             let index = ch.to_digit(10).unwrap_or(0) as usize;
             if index > 0 {
-                return handle_backend_switch_by_number(app, index);
+                match app.backend_popup_section() {
+                    BackendPopupSection::ActiveBackend => return handle_backend_switch_by_number(app, index),
+                    BackendPopupSection::SubagentBackend => {
+                        // Validate index is within bounds
+                        if index <= app.backends().len() {
+                            app.request_set_subagent_backend(index - 1);
+                            app.close_popup();
+                        }
+                        return InputAction::None;
+                    }
+                }
             }
         }
         _ => {}
@@ -202,6 +230,24 @@ fn handle_backend_switch_by_number(app: &mut App, index: usize) -> InputAction {
 
     if app.request_switch_backend_by_index(index) {
         app.close_popup();
+    }
+    InputAction::None
+}
+
+/// Handle Enter key in subagent backend section.
+fn handle_subagent_backend_enter(app: &mut App) -> InputAction {
+    let sel = app.subagent_selection();
+    if sel == 0 {
+        // "Disabled" — clear subagent backend
+        app.request_clear_subagent_backend();
+        app.close_popup();
+    } else {
+        // Backend at index sel-1
+        let backend_index = sel - 1;
+        if backend_index < app.backends().len() {
+            app.request_set_subagent_backend(backend_index);
+            app.close_popup();
+        }
     }
     InputAction::None
 }
