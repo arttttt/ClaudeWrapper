@@ -5,7 +5,7 @@
 
 mod state;
 
-pub use state::{BackendError, BackendState, SubagentBackend, SubagentRegistry, SwitchLogEntry};
+pub use state::{BackendError, BackendState, AgentBackendState, AgentRegistry, SwitchLogEntry};
 
 /// Manager for backend operations (placeholder for future CRUD operations).
 ///

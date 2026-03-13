@@ -76,6 +76,8 @@ pub enum AppEvent {
     RestartClaude,
     /// Subagent backend changed (no PTY restart needed).
     SetSubagentBackend { backend_id: Option<String> },
+    /// Teammate backend changed (no PTY restart needed).
+    SetTeammateBackend { backend_id: Option<String> },
 }
 
 pub struct EventHandler {

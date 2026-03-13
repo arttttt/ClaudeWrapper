@@ -140,6 +140,11 @@ fn tmux_shim_contains_session_token_header() {
         script.contains(&format!("x-session-token:{}", token)),
         "should contain the session token value"
     );
+    // agent_id is now embedded in the URL path, not in headers
+    assert!(
+        script.contains("/teammate/${agent_id}"),
+        "should embed agent_id in URL path"
+    );
 }
 
 #[test]
@@ -173,8 +178,10 @@ fn tmux_shim_injects_both_url_and_headers() {
     let dir = shim_dir(&shim);
     let script = std::fs::read_to_string(Path::new(&dir).join("tmux")).unwrap();
 
-    // Both INJECT_URL and INJECT_HEADERS should be defined
+    // INJECT_URL is built per-agent inside the loop (contains agent_id in path)
     assert!(script.contains("INJECT_URL="));
+
+    // INJECT_HEADERS carries session token
     assert!(script.contains("INJECT_HEADERS="));
 
     // Both should be injected via sed into the arg string
@@ -182,4 +189,8 @@ fn tmux_shim_injects_both_url_and_headers() {
 
     // ANTHROPIC_CUSTOM_HEADERS stripping should be present
     assert!(script.contains("ANTHROPIC_CUSTOM_HEADERS="));
+
+    // Should register teammate via curl
+    assert!(script.contains("/api/teammate-start"));
+    assert!(script.contains("extract_agent_id"));
 }

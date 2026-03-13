@@ -2,9 +2,12 @@
 //!
 //! Intercepts all tmux calls from Claude Code. For `send-keys` commands
 //! that spawn a teammate process, injects `ANTHROPIC_BASE_URL` pointing
-//! to the `/teammate` prefix on our proxy and `ANTHROPIC_CUSTOM_HEADERS`
-//! with the session token so the routing layer can direct teammate traffic
-//! to a cheaper backend.
+//! to `/teammate/{agent_id}` on our proxy so the routing layer can
+//! identify the teammate and direct traffic to the correct backend.
+//!
+//! The agent_id is embedded in the URL path (not a header) because
+//! URL is the most reliable transport — headers can be stripped by
+//! proxies, CDNs, or CC itself.
 //!
 //! Detection relies on `--agent-id` flag (part of agent teams protocol),
 //! not on the binary path — works across all Claude Code installation
@@ -25,9 +28,9 @@ const TEMPLATE: &str = r#"#!/bin/bash
 # AnyClaude tmux shim — intercepts send-keys to inject teammate routing.
 #
 # Detects teammate spawns by --agent-id flag (agent teams protocol), then
-# replaces ANTHROPIC_BASE_URL to route through the /teammate proxy path.
-# Does not depend on binary path or command structure — only on protocol-level
-# env vars and flags that must exist for agent teams to work.
+# registers the teammate via /api/teammate-start and replaces
+# ANTHROPIC_BASE_URL to route through /teammate/{agent_id} proxy path.
+# Agent ID is embedded in the URL (most reliable transport).
 
 SHIM_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_ENABLED=__LOG_ENABLED__
@@ -49,6 +52,11 @@ find_real_tmux() {
   done
 }
 
+# Extract agent_id value from a string containing "--agent-id <value>".
+extract_agent_id() {
+  printf '%s' "$1" | grep -oE '\-\-agent-id [^ ]+' | head -1 | cut -d' ' -f2
+}
+
 REAL_TMUX="$(find_real_tmux)"
 if [ -z "$REAL_TMUX" ]; then
   slog "ERROR: real tmux not found"
@@ -58,8 +66,6 @@ fi
 
 # Teammate env vars to inject.
 # Uses sed with | delimiter to avoid conflicts with / and : in URLs.
-INJECT_URL="ANTHROPIC_BASE_URL=http://127.0.0.1:__PORT__/teammate"
-INJECT_HEADERS="ANTHROPIC_CUSTOM_HEADERS=x-session-token:__SESSION_TOKEN__"
 args=()
 has_send_keys=false
 injected=false
@@ -75,6 +81,23 @@ for arg in "$@"; do
     # stable across Claude Code versions and installation methods).
     if [[ "$arg" == *"--agent-id "* ]]; then
       slog "BEFORE inject: $(printf '%q' "$arg")"
+
+      # Extract agent_id for URL embedding.
+      agent_id=$(extract_agent_id "$arg")
+      slog "Extracted agent_id: $agent_id"
+
+      # Register teammate in proxy registry (fire-and-forget, 5s timeout).
+      if [ -n "$agent_id" ]; then
+        curl -s -m 5 -X POST "http://127.0.0.1:__PORT__/api/teammate-start" \
+          -H 'Content-Type: application/json' \
+          -d "{\"agent_id\":\"$agent_id\"}" >/dev/null 2>&1
+        slog "Registered teammate '$agent_id' via /api/teammate-start"
+      fi
+
+      # Agent ID embedded in URL path — most reliable transport.
+      INJECT_URL="ANTHROPIC_BASE_URL=http://127.0.0.1:__PORT__/teammate/${agent_id}"
+      # Session token header for auth.
+      INJECT_HEADERS="ANTHROPIC_CUSTOM_HEADERS=x-session-token:__SESSION_TOKEN__"
 
       # Strip existing ANTHROPIC_CUSTOM_HEADERS if present (shim re-entry)
       if [[ "$arg" == *ANTHROPIC_CUSTOM_HEADERS=* ]]; then

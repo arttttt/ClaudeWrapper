@@ -134,7 +134,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
 
     // Create teammate shim if agents routing is configured.
     // The shim must stay alive for the entire session (owns a temp directory).
-    let _teammate_shim = if config_store.get().agents.is_some() {
+    let _teammate_shim = {
         let log_enabled = config_store.get().debug_logging.level != crate::config::DebugLogLevel::Off;
         match TeammateShim::create(actual_addr.port(), &session_token, log_enabled) {
             Ok(shim) => {
@@ -145,13 +145,10 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 Some(shim)
             }
             Err(err) => {
-                // Non-fatal: warn and continue without teammate routing
                 crate::metrics::app_log("runtime", &format!("Agent team routing disabled: {}", err));
                 None
             }
         }
-    } else {
-        None
     };
 
     // Inject subagent hooks into spawn args now that we know the proxy port.
@@ -176,6 +173,7 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
     let proxy_handle = proxy_server.handle();
     let backend_state = proxy_server.backend_state();
     let subagent_backend_state = proxy_server.subagent_backend();
+    let teammate_backend_state = proxy_server.teammate_backend();
 
     // Wire history provider: converts SwitchLogEntry → HistoryEntry at the boundary
     {
@@ -564,6 +562,10 @@ pub fn run(backend_override: Option<String>, claude_args: Vec<String>) -> io::Re
                 // 2. Update shared proxy state — no PTY restart needed!
                 subagent_backend_state.set(backend_id);
             }
+            Ok(AppEvent::SetTeammateBackend { backend_id }) => {
+                app.set_teammate_backend(backend_id.clone());
+                teammate_backend_state.set(backend_id);
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -682,6 +684,9 @@ async fn run_ui_bridge(
             }
             UiCommand::SetSubagentBackend { backend_id } => {
                 let _ = event_tx.send(AppEvent::SetSubagentBackend { backend_id });
+            }
+            UiCommand::SetTeammateBackend { backend_id } => {
+                let _ = event_tx.send(AppEvent::SetTeammateBackend { backend_id });
             }
         }
     }

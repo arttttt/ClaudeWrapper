@@ -51,49 +51,52 @@ pub struct SwitchLogEntry {
     pub new_backend: String,
 }
 
-/// Runtime state for subagent backend routing.
+/// Runtime state for agent backend routing (subagents and teammates).
 ///
 /// Initialized from config on startup, updated via UI (Ctrl+B popup).
-/// Read by detect_marker_model() on every subagent request.
+/// Each agent type (subagent, teammate) gets its own instance.
 #[derive(Clone)]
-pub struct SubagentBackend {
+pub struct AgentBackendState {
     inner: Arc<RwLock<Option<String>>>,
 }
 
-impl SubagentBackend {
-    /// Create a new SubagentBackend with an initial value.
+impl AgentBackendState {
+    /// Create a new AgentBackendState with an initial value.
     pub fn new(initial: Option<String>) -> Self {
         Self {
             inner: Arc::new(RwLock::new(initial)),
         }
     }
 
-    /// Get current subagent backend name.
+    /// Get current backend name.
     pub fn get(&self) -> Option<String> {
         self.inner.read().clone()
     }
 
-    /// Set subagent backend. None = disable (inherit parent model).
+    /// Set backend. None = disable (inherit parent model).
     pub fn set(&self, backend: Option<String>) {
         *self.inner.write() = backend;
     }
 }
 
-/// Maps subagent agent_ids to their birth backends.
+/// Maps agent_ids to their birth backends (subagents and teammates).
 ///
 /// When CC spawns a subagent, the SubagentStart hook registers the
-/// subagent's `agent_id` (unique per instance, e.g. "a1b2c3d4e5f6a7b8")
-/// with the backend that was active at spawn time. The agent_id is
-/// injected into the subagent's context as `⟨AC:{agent_id}⟩`. At
-/// routing time, the marker is extracted and looked up here to resolve
-/// the backend. SubagentStop removes the entry.
+/// subagent's `agent_id` with the backend active at spawn time. The
+/// agent_id is injected into the subagent's context as `⟨AC:{agent_id}⟩`.
+/// At routing time, the marker is extracted and looked up here.
+///
+/// For teammates, the tmux shim registers the agent_id via
+/// `/api/teammate-start`. The agent_id is passed in the `x-agent-id`
+/// header and looked up here at routing time.
 #[derive(Clone)]
-pub struct SubagentRegistry {
+pub struct AgentRegistry {
     inner: Arc<RwLock<HashMap<String, String>>>,
 }
 
-impl SubagentRegistry {
-    /// AC marker delimiters — shared between hooks (write) and routing (read).
+impl AgentRegistry {
+    /// AC marker delimiters — used for subagent session affinity.
+    /// Shared between hooks (write) and routing (read).
     pub const MARKER_PREFIX: &str = "\u{27E8}AC:";
     pub const MARKER_SUFFIX: char = '\u{27E9}';
 
@@ -108,12 +111,12 @@ impl SubagentRegistry {
         }
     }
 
-    /// Register a subagent identifier → backend mapping.
+    /// Register an agent identifier → backend mapping.
     pub fn register(&self, id: &str, backend: &str) {
         self.inner.write().insert(id.to_string(), backend.to_string());
     }
 
-    /// Remove a subagent mapping (called on SubagentStop).
+    /// Remove an agent mapping.
     pub fn remove(&self, id: &str) {
         self.inner.write().remove(id);
     }
@@ -123,7 +126,7 @@ impl SubagentRegistry {
         self.inner.read().is_empty()
     }
 
-    /// Look up the backend for a subagent identifier.
+    /// Look up the backend for an agent identifier.
     pub fn lookup(&self, id: &str) -> Option<String> {
         self.inner.read().get(id).cloned()
     }

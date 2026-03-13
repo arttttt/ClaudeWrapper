@@ -277,7 +277,7 @@ async fn bare_teammate_prefix_returns_404() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn no_agents_returns_404_on_teammate_path() {
+async fn no_agents_config_teammate_falls_back_to_main_backend() {
     let mock = MockBackend::start().await;
     mock.enqueue_response(MockResponse::json(r#"{"ok":true}"#)).await;
 
@@ -288,17 +288,16 @@ async fn no_agents_returns_404_on_teammate_path() {
     );
     let h = TestHarness::start(config).await;
 
-    // /teammate should fall through to main pipeline (since no nest)
-    // The main backend gets /teammate/v1/messages as-is
+    // /teammate nest is always mounted — without agents config,
+    // falls back to main backend via active_backend
     let _ = h.client
         .post(h.url("/teammate/v1/messages"))
         .body("{}")
         .send().await.unwrap();
 
-    // Main pipeline handles it (forwarded to main backend with full path)
     let requests = mock.captured_requests().await;
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path, "/teammate/v1/messages");
+    assert_eq!(requests[0].path, "/v1/messages");
 }
 
 // ---------------------------------------------------------------------------

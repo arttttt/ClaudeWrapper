@@ -9,8 +9,8 @@ use axum::Router;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::backend::{BackendState, SubagentBackend, SubagentRegistry};
-use crate::config::{AgentsConfig, DebugLogLevel};
+use crate::backend::{BackendState, AgentBackendState, AgentRegistry};
+use crate::config::DebugLogLevel;
 use crate::proxy::error::ErrorResponse;
 use crate::proxy::hooks::HookState;
 use crate::metrics::{DebugLogger, ObservabilityHub, RequestMeta};
@@ -28,11 +28,20 @@ use crate::proxy::timeout::TimeoutConfig;
 #[derive(Clone)]
 pub struct BackendOverride(pub String);
 
+/// Marker extension for the teammate pipeline.
+///
+/// Set on `/teammate` nested routes. Signals `proxy_handler` to extract
+/// the agent_id from the first URL path segment (e.g. `/teammate/{id}/v1/messages`)
+/// and look up the backend in the agent registry.
+#[derive(Clone)]
+pub struct TeammateMarker;
+
 #[derive(Clone)]
 pub struct RouterEngine {
     health: Arc<HealthHandler>,
     pub(crate) backend_state: BackendState,
-    pub(crate) subagent_backend: SubagentBackend,
+    pub(crate) subagent_backend: AgentBackendState,
+    pub(crate) teammate_backend: AgentBackendState,
     observability: ObservabilityHub,
     pub(crate) debug_logger: Arc<DebugLogger>,
     pipeline_config: PipelineConfig,
@@ -44,8 +53,9 @@ impl RouterEngine {
         timeout_config: TimeoutConfig,
         pool_config: PoolConfig,
         backend_state: BackendState,
-        subagent_backend: SubagentBackend,
-        subagent_registry: SubagentRegistry,
+        subagent_backend: AgentBackendState,
+        teammate_backend: AgentBackendState,
+        agent_registry: AgentRegistry,
         observability: ObservabilityHub,
         debug_logger: Arc<DebugLogger>,
         transformer_registry: Arc<TransformerRegistry>,
@@ -53,7 +63,7 @@ impl RouterEngine {
     ) -> Self {
         let pipeline_config = PipelineConfig::new(
             backend_state.clone(),
-            subagent_registry,
+            agent_registry,
             transformer_registry.clone(),
             timeout_config,
             pool_config,
@@ -63,6 +73,7 @@ impl RouterEngine {
             health: Arc::new(HealthHandler::new()),
             backend_state,
             subagent_backend,
+            teammate_backend,
             observability,
             debug_logger,
             pipeline_config,
@@ -98,7 +109,6 @@ async fn auth_middleware(
 
 pub fn build_router(
     engine: RouterEngine,
-    agents: &Option<AgentsConfig>,
 ) -> Router {
     // Main pipeline: auth middleware only (thinking is handled inside the pipeline)
     let main = Router::new()
@@ -111,12 +121,15 @@ pub fn build_router(
 
     // Hook endpoints don't need auth — they're called by CC hooks via localhost curl.
     let hook_state = HookState {
+        backend_state: engine.backend_state.clone(),
         subagent_backend: engine.subagent_backend.clone(),
-        registry: engine.pipeline_config.subagent_registry.clone(),
+        teammate_backend: engine.teammate_backend.clone(),
+        registry: engine.pipeline_config.agent_registry.clone(),
     };
     let hook_routes = Router::new()
         .route("/api/subagent-start", post(crate::proxy::hooks::handle_subagent_start))
         .route("/api/subagent-stop", post(crate::proxy::hooks::handle_subagent_stop))
+        .route("/api/teammate-start", post(crate::proxy::hooks::handle_teammate_start))
         .with_state(hook_state);
 
     let mut router = Router::new()
@@ -124,24 +137,18 @@ pub fn build_router(
         .with_state(engine.clone())
         .merge(hook_routes);
 
-    // TODO: restore auth_middleware for teammate pipeline once session token
-    //        is reliably propagated to teammate processes (e.g. via env or CLI flag
-    //        instead of tmux shim injection).
-    // Teammate pipeline: no session auth (token injection into tmux is unreliable), fixed backend
-    if let Some(config) = agents {
+    // Teammate pipeline: dynamic per-teammate backend via agent_id in URL path.
+    // URL: /teammate/{agent_id}/v1/messages → agent_id extracted, path stripped.
+    // Always enabled — without [agents] config, falls back to active main backend.
+    {
         let teammate = Router::new()
             .fallback(proxy_handler)
-            .layer(Extension(BackendOverride(
-                config.teammate_backend.clone(),
-            )))
+            .layer(Extension(TeammateMarker))
             .with_state(engine.clone());
 
         crate::metrics::app_log(
             "router",
-            &format!(
-                "Teammate pipeline: /teammate/* → backend={}",
-                config.teammate_backend,
-            ),
+            "Teammate pipeline: /teammate/* → dynamic per-agent routing",
         );
 
         router = router.nest("/teammate", teammate);
@@ -160,7 +167,7 @@ async fn health_handler(
 async fn proxy_handler(
     State(state): State<RouterEngine>,
     RawQuery(query): RawQuery,
-    req: Request<Body>,
+    mut req: Request<Body>,
 ) -> Response {
     use crate::proxy::pipeline::execute_pipeline;
 
@@ -168,10 +175,58 @@ async fn proxy_handler(
     let query_str = query.as_deref().unwrap_or("");
     crate::metrics::app_log("router", &format!("Incoming request: {} {} request_id={}", req.method(), req.uri().path(), request_id));
 
-    // Backend: from BackendOverride (teammate pipeline) or active backend (main pipeline)
-    let teammate_backend = req.extensions()
-        .get::<BackendOverride>()
-        .map(|bo| bo.0.clone());
+    // Determine if this is a teammate request and resolve backend override.
+    // TeammateMarker: extract agent_id from first path segment → registry lookup.
+    // The shim sets ANTHROPIC_BASE_URL=.../teammate/{agent_id}, so after axum
+    // strips /teammate, the remaining path is /{agent_id}/v1/messages.
+    // We extract the agent_id, look it up in the registry, and strip it from
+    // the URI before forwarding. If the first segment is not a registered
+    // agent_id, it is left in place (graceful fallback).
+    let is_teammate = req.extensions().get::<TeammateMarker>().is_some();
+    let teammate_backend = if is_teammate {
+        // Extract candidate agent_id from first path segment: /{agent_id}/v1/messages
+        let path = req.uri().path();
+        let candidate = path.strip_prefix('/')
+            .and_then(|rest| rest.split('/').next())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        // Always strip agent_id segment from URI so pipeline sees /v1/messages.
+        // The shim embeds the agent_id in the URL path, so it must be removed
+        // before forwarding — regardless of whether the registry knows this id.
+        if let Some(ref id) = candidate {
+            let prefix = format!("/{}", id);
+            let new_path = path.strip_prefix(&prefix).unwrap_or(path);
+            let new_path = if new_path.is_empty() { "/" } else { new_path };
+            let new_uri = if let Some(q) = req.uri().query() {
+                format!("{}?{}", new_path, q)
+            } else {
+                new_path.to_string()
+            };
+            if let Ok(uri) = new_uri.parse() {
+                *req.uri_mut() = uri;
+            }
+        }
+
+        // Registry lookup determines backend; fallback to teammate backend.
+        let resolved = candidate.as_ref()
+            .and_then(|id| state.pipeline_config.agent_registry.lookup(id));
+
+        if let Some(backend) = resolved {
+            Some(backend)
+        } else {
+            if let Some(id) = &candidate {
+                crate::metrics::app_log("router", &format!(
+                    "Teammate '{}' not in registry, using current teammate backend", id
+                ));
+            }
+            state.teammate_backend.get()
+        }
+    } else {
+        req.extensions()
+            .get::<BackendOverride>()
+            .map(|bo| bo.0.clone())
+    };
 
     let active_backend = teammate_backend
         .clone()

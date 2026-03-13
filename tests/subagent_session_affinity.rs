@@ -370,28 +370,28 @@ mod hook_input {
 }
 
 // ============================================================================
-// SubagentRegistry
+// AgentRegistry
 // ============================================================================
 
 mod registry {
-    use anyclaude::backend::SubagentRegistry;
+    use anyclaude::backend::AgentRegistry;
 
     #[test]
     fn register_and_lookup() {
-        let reg = SubagentRegistry::new();
+        let reg = AgentRegistry::new();
         reg.register("sess-1", "openrouter");
         assert_eq!(reg.lookup("sess-1"), Some("openrouter".into()));
     }
 
     #[test]
     fn lookup_missing_returns_none() {
-        let reg = SubagentRegistry::new();
+        let reg = AgentRegistry::new();
         assert_eq!(reg.lookup("nonexistent"), None);
     }
 
     #[test]
     fn remove_cleans_up() {
-        let reg = SubagentRegistry::new();
+        let reg = AgentRegistry::new();
         reg.register("sess-1", "kimi");
         reg.remove("sess-1");
         assert_eq!(reg.lookup("sess-1"), None);
@@ -399,13 +399,13 @@ mod registry {
 
     #[test]
     fn remove_nonexistent_is_noop() {
-        let reg = SubagentRegistry::new();
+        let reg = AgentRegistry::new();
         reg.remove("nonexistent"); // should not panic
     }
 
     #[test]
     fn multiple_entries() {
-        let reg = SubagentRegistry::new();
+        let reg = AgentRegistry::new();
         reg.register("a", "backend-1");
         reg.register("b", "backend-2");
         assert_eq!(reg.lookup("a"), Some("backend-1".into()));
@@ -414,7 +414,7 @@ mod registry {
 
     #[test]
     fn overwrite_existing() {
-        let reg = SubagentRegistry::new();
+        let reg = AgentRegistry::new();
         reg.register("sess-1", "old-backend");
         reg.register("sess-1", "new-backend");
         assert_eq!(reg.lookup("sess-1"), Some("new-backend".into()));

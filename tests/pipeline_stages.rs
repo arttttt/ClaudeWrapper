@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::http::{header::{AUTHORIZATION, CONTENT_TYPE}, HeaderMap, Method, Request};
 use serde_json::json;
 
-use anyclaude::backend::{BackendState, SubagentRegistry};
+use anyclaude::backend::{BackendState, AgentRegistry};
 use anyclaude::config::{Backend, Config, DebugLogDestination, DebugLogFormat, DebugLogLevel, DebugLoggingConfig, Defaults};
 use anyclaude::metrics::{BackendOverride, DebugLogger, ObservabilityHub, RequestRecord, RequestSpan};
 use anyclaude::proxy::pipeline::{self, PipelineContext, PipelineConfig};
@@ -122,14 +122,14 @@ fn create_test_pipeline_config() -> PipelineConfig {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
 
-    let subagent_registry = SubagentRegistry::new();
+    let agent_registry = AgentRegistry::new();
     let transformer_registry = Arc::new(TransformerRegistry::new());
     let timeout_config = TimeoutConfig::default();
     let pool_config = PoolConfig::default();
 
     PipelineConfig::new(
         backend_state,
-        subagent_registry,
+        agent_registry,
         transformer_registry,
         timeout_config,
         pool_config,
@@ -235,7 +235,7 @@ async fn test_extract_request_no_content_type() {
 fn test_resolve_backend_active_backend() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
 
     let mut ctx = create_test_context();
     let parsed_body = Some(json!({"model": "claude-3"}));
@@ -256,7 +256,7 @@ fn test_resolve_backend_active_backend() {
 fn test_resolve_backend_override() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
 
     let mut ctx = create_test_context();
     let parsed_body = Some(json!({"model": "claude-3"}));
@@ -277,7 +277,7 @@ fn test_resolve_backend_override() {
 fn test_resolve_backend_plugin_override() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
 
     let mut ctx = create_test_context();
     let parsed_body = Some(json!({"model": "claude-3"}));
@@ -303,7 +303,7 @@ fn test_resolve_backend_plugin_override() {
 fn test_resolve_backend_marker_model() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
 
     let mut ctx = create_test_context();
 
@@ -326,7 +326,7 @@ fn test_resolve_backend_marker_model() {
 fn test_resolve_backend_anyclaude_prefix() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
 
     let mut ctx = create_test_context();
 
@@ -349,7 +349,7 @@ fn test_resolve_backend_anyclaude_prefix() {
 fn test_resolve_backend_direct_backend_name() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
 
     let mut ctx = create_test_context();
 
@@ -372,7 +372,7 @@ fn test_resolve_backend_direct_backend_name() {
 fn test_resolve_backend_missing_backend() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
 
     let mut ctx = create_test_context();
 
@@ -393,7 +393,7 @@ fn test_resolve_backend_missing_backend() {
 fn test_resolve_backend_priority_plugin_over_teammate() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
 
     let mut ctx = create_test_context();
 
@@ -419,7 +419,7 @@ fn test_resolve_backend_priority_plugin_over_teammate() {
 fn test_resolve_backend_priority_teammate_over_marker() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
 
     let mut ctx = create_test_context();
 
@@ -446,7 +446,7 @@ fn test_resolve_backend_priority_teammate_over_marker() {
 fn test_ac_marker_routes_to_backend() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
     // Register subagent identifier → backend mapping (simulates SubagentStart hook)
     registry.register("a1b2c3d4e5f6a7b8", "openrouter");
 
@@ -474,7 +474,7 @@ fn test_ac_marker_routes_to_backend() {
 fn test_no_ac_marker_uses_active_backend() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
 
     let mut ctx = create_test_context();
 
@@ -501,7 +501,7 @@ fn test_no_ac_marker_uses_active_backend() {
 fn test_ac_marker_wins_over_marker_model() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
     registry.register("a2b3c4d5e6f7a8b9", "openrouter");
 
     let mut ctx = create_test_context();
@@ -528,7 +528,7 @@ fn test_ac_marker_wins_over_marker_model() {
 fn test_ac_marker_skipped_when_registry_empty() {
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
     // Empty registry — marker parsing is skipped entirely
 
     let mut ctx = create_test_context();
@@ -1179,7 +1179,7 @@ fn test_corner_case_invalid_marker_model() {
     // Marker model pointing to non-existent backend should fall through
     let config = create_test_config();
     let backend_state = BackendState::from_config(config).unwrap();
-    let registry = SubagentRegistry::new();
+    let registry = AgentRegistry::new();
 
     let mut ctx = create_test_context();
 
