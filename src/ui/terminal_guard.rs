@@ -70,10 +70,15 @@ pub fn setup_terminal() -> io::Result<(Terminal<CrosstermBackend<Stdout>>, Termi
     let terminal = Terminal::new(backend)?;
     let guard = TerminalGuard::new();
     guard.set_cleanup(|| {
-        let _ = disable_raw_mode();
         let mut stdout = io::stdout();
+        // Disable mouse/paste FIRST while still in raw mode,
+        // so pending mouse events don't leak into the shell.
         let _ = stdout.execute(DisableMouseCapture);
         let _ = stdout.execute(DisableBracketedPaste);
+        let _ = stdout.flush();
+        // Flush pending input from kernel tty buffer (in-flight mouse events).
+        unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH); }
+        let _ = disable_raw_mode();
         let _ = stdout.execute(LeaveAlternateScreen);
         let _ = stdout.write_all(b"\x1b[?1036l\x1b[?1039l");
         let _ = stdout.flush();
