@@ -2,6 +2,66 @@
 
 All notable changes to AnyClaude are documented in this file.
 
+## [0.5.0] - 2026-03-13
+
+### Bug Fixes
+
+- Update stale shim tests to match current injection logic
+- Skip AC marker parsing when subagent registry is empty
+- Detect teammate spawns by --agent-id flag instead of binary path
+- Always set CLAUDE_CODE_SUBAGENT_MODEL env var
+- Remove dead code and add subagent backend validation in UI
+- Patch dependency vulnerabilities and optimize release profile
+- Inject shim PATH into initial spawn env
+- Disable session token check for teammate pipeline
+- Inject session token into tmux shim for teammate auth
+- Update spawn env with actual proxy port after try_bind
+- Resolve 3 critical pipeline bugs found in review
+- Use append mode instead of truncate for log files
+- Ctrl+R now resumes current session via --resume
+- --continue now uses --resume for existing sessions
+- Replace fragile sed with bash regex in tmux shim
+
+### Documentation
+
+- Update subagent backend spec and add session affinity spec
+- Add pluggable feature architecture design and implementation plan
+- Add subagent backend selection specification
+- Add GPU terminal architecture specification
+- Update README to match current architecture
+- Add pipeline unification analysis from 7 review rounds
+- Clarify thinking middleware skipping for teammates
+- Update README with reverse model mapping and text selection
+
+### Features
+
+- Unified agent routing with teammate pipeline
+- Subagent registry with session affinity via AC markers
+- Subagent session affinity via CC hooks
+- **ui:** Subagent backend selection in backend popup
+- **proxy:** Subagent backend runtime state and routing
+- **config:** Add subagent_backend to AgentTeamsConfig
+- Add session token handshake via ANTHROPIC_CUSTOM_HEADERS
+- Stamp dev builds with git hash, add --version flag
+- Add unified 7-stage linear pipeline behind feature flag
+- Cleanup old per-session log files on startup
+- Use per-session log file names to isolate instance logs
+- Add Ctrl+R to restart Claude Code (continues session)
+
+### Refactor
+
+- Harden AC marker parsing against false positives
+- Use agent_id instead of session_id for subagent routing
+- Remove CLAUDE_CODE_SUBAGENT_MODEL in favor of AC marker routing
+- Rename AgentTeamsConfig to AgentsConfig
+- Add SAFETY comments, reduce cloning, deduplicate formatting
+- Remove legacy pipeline and unified-pipeline feature flag
+
+### Testing
+
+- Add corner-case tests for Ctrl+R restart
+- Add tests for Ctrl+R restart feature
+
 ## [0.4.0] - 2026-02-15
 
 ### Bug Fixes
@@ -12,6 +72,10 @@ All notable changes to AnyClaude are documented in this file.
 - Respect debug logging config in tmux shim
 - Propagate routing decision to upstream forwarding
 - Detect Shift+Enter via macOS CGEvent for newline insertion
+
+### Chore
+
+- Release v0.4.0
 
 ### Documentation
 
