@@ -19,7 +19,7 @@ AnyClaude solves this:
 ## Features
 
 - **Hot-Swap Backends** — Switch between providers without restarting Claude
-- **Agent Teams** — Route teammate agents to a separate backend (experimental)
+- **Agent Routing** — Route teammates and subagents to separate backends with session affinity
 - **Thinking Block Filtering** — Automatic filtering of previous backend's thinking blocks on switch
 - **Adaptive Thinking Conversion** — Convert adaptive thinking to enabled format for non-Anthropic backends (`thinking_compat`)
 - **Model Mapping** — Remap model names per backend (`model_opus`, `model_sonnet`, `model_haiku`)
@@ -35,23 +35,25 @@ AnyClaude solves this:
 └──────────────┬──────────────┘
                │
         ┌──────▼──────┐
-        │ Claude Code │ (main agent + teammate agents)
+        │ Claude Code │ (main + subagents + teammates)
         └──────┬──────┘
                │ ANTHROPIC_BASE_URL
         ┌──────▼──────┐
-        │ Local Proxy │
-        └──┬───────┬──┘
-           │       │
-      /v1/*│       │/teammate/v1/*
-           │       │
-     ┌─────▼──┐  ┌─▼──────────┐
-     │ Active │  │  Teammate   │
-     │Backend │  │  Backend    │
-     └────────┘  └─────────────┘
+        │  7-Stage    │
+        │  Pipeline   │
+        └─┬─────┬───┬─┘
+          │     │   │
+    /v1/* │     │   │ /teammate/{id}/v1/*
+          │     │   │
+   ┌──────▼┐ ┌─▼──────────┐ ┌─▼──────────┐
+   │Active │ │  Subagent   │ │  Teammate   │
+   │Backend│ │  Backend    │ │  Backend    │
+   └───────┘ └─────────────┘ └─────────────┘
 ```
 
 The main agent's requests go through the active backend (switchable via `Ctrl+B`).
-Teammate agents are routed to a fixed backend via the `/teammate` path prefix.
+Subagents are pinned to a backend via session affinity (AC markers in CC hooks).
+Teammate agents are routed via `/teammate/{agent_id}` URL path prefix.
 
 ## Installation
 
@@ -68,22 +70,6 @@ cargo build --release
 
 ## Usage
 
-```bash
-anyclaude
-```
-
-Override default backend at startup:
-
-```bash
-anyclaude --backend kimi
-```
-
-Pass arguments through to Claude Code:
-
-```bash
-anyclaude -- --model claude-sonnet-4-5-20250929
-```
-
 The wrapper automatically:
 1. Starts a local proxy (port auto-assigned starting from configured `bind_addr`)
 2. Sets `ANTHROPIC_BASE_URL` environment variable
@@ -98,6 +84,7 @@ The wrapper automatically:
 | `Ctrl+S` | Status/metrics popup |
 | `Ctrl+H` | Backend switch history |
 | `Ctrl+E` | Settings dialog |
+| `Ctrl+R` | Restart Claude Code (preserves session) |
 | `Ctrl+Q` | Quit |
 | `1-9` | Quick-select backend (in switcher) |
 
@@ -188,9 +175,10 @@ auth_type = "passthrough"         # Forward original auth headers
 input_per_million = 3.00          # Cost per million input tokens
 output_per_million = 15.00        # Cost per million output tokens
 
-# Route teammate agents to a different backend (experimental)
-[agent_teams]
-teammate_backend = "alternative"  # Must match a [[backends]] name
+# Route agents to different backends
+[agents]
+teammate_backend = "alternative"  # Backend for teammate agents
+subagent_backend = "alternative"  # Backend for subagents (optional)
 ```
 
 ### Authentication Types
@@ -220,22 +208,24 @@ Only configured families are remapped. Omitted families pass through unchanged.
 
 Responses are automatically reverse-mapped: if the backend returns its own model name (e.g. `provider-large`), the proxy rewrites it back to the original name (e.g. `claude-opus-4-6`) so Claude Code sees a consistent model identity.
 
-### Agent Teams (Experimental)
+### Agent Routing
 
-Route Claude Code's teammate agents to a separate backend. Useful when you want the main agent on one provider and teammates on a cheaper/different one.
+Route Claude Code's subagents and teammates to separate backends. Useful when you want the main agent on a premium provider and agents on a cheaper one.
 
 Requires Claude Code's experimental agent teams feature. Enable it via `Ctrl+E` > Settings in the TUI.
 
 ```toml
-[agent_teams]
-teammate_backend = "alternative"  # Backend name for teammate requests
+[agents]
+teammate_backend = "alternative"  # Backend for teammate agents
+subagent_backend = "alternative"  # Backend for subagents (optional)
 ```
 
 How it works:
 - The main agent's requests go to the active backend (switchable via `Ctrl+B`)
-- Teammate agents are intercepted via PATH shims and routed through `/teammate/*` to the fixed `teammate_backend`
-- Thinking block filtering is not applied to teammate requests
-- Backend switching does not affect teammate routing
+- **Subagents** are registered via CC hooks (SubagentStart/SubagentStop) and pinned to a backend for their lifetime via session affinity. The subagent backend is also switchable via `Ctrl+B`
+- **Teammates** are intercepted via a tmux shim and routed through `/teammate/{agent_id}/*` to the fixed `teammate_backend`
+- Thinking block filtering is not applied to agent requests
+- Backend switching does not affect agent routing
 
 ### Thinking Block Handling
 
@@ -304,12 +294,18 @@ max_files = 5                      # Keep 5 rotated files
 ## Development
 
 ```bash
-./build.sh              # Build release binary
+just check              # Run lint + tests
+just release 0.5.0      # Tag a release (sets version, generates changelog, creates tag)
+just changelog          # Update CHANGELOG without releasing
+```
+
+```bash
+./build.sh              # Build release binary (dev-stamped version)
+./build.sh release-tag  # Build release without dev version stamp
 ./build.sh debug        # Build debug binary
 ./build.sh test         # Run tests
 ./build.sh clean        # Clean build artifacts
 ./build.sh install      # Build and install to ~/.cargo/bin
-./build.sh release-tag  # Build release without dev version stamp
 ```
 
 ## License
