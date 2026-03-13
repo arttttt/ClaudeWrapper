@@ -141,24 +141,34 @@ fn handle_backend_switch_key(app: &mut App, key: &KeyInput) -> InputAction {
             match app.backend_popup_section() {
                 BackendPopupSection::ActiveBackend => app.move_backend_selection(-1),
                 BackendPopupSection::SubagentBackend => app.move_subagent_selection(-1),
+                BackendPopupSection::TeammateBackend => app.move_teammate_selection(-1),
             }
         }
         KeyKind::Arrow(Direction::Down) => {
             match app.backend_popup_section() {
                 BackendPopupSection::ActiveBackend => app.move_backend_selection(1),
                 BackendPopupSection::SubagentBackend => app.move_subagent_selection(1),
+                BackendPopupSection::TeammateBackend => app.move_teammate_selection(1),
             }
         }
         KeyKind::Enter => {
             match app.backend_popup_section() {
                 BackendPopupSection::ActiveBackend => return handle_backend_switch_enter(app),
                 BackendPopupSection::SubagentBackend => return handle_subagent_backend_enter(app),
+                BackendPopupSection::TeammateBackend => return handle_teammate_backend_enter(app),
             }
         }
         KeyKind::Backspace | KeyKind::Nav(term_input::NavKey::Delete) => {
-            if app.backend_popup_section() == BackendPopupSection::SubagentBackend {
-                app.request_clear_subagent_backend();
-                app.close_popup();
+            match app.backend_popup_section() {
+                BackendPopupSection::SubagentBackend => {
+                    app.request_clear_subagent_backend();
+                    app.close_popup();
+                }
+                BackendPopupSection::TeammateBackend => {
+                    app.request_clear_teammate_backend();
+                    app.close_popup();
+                }
+                _ => {}
             }
         }
         KeyKind::Char(ch) if ch.is_ascii_digit() => {
@@ -167,9 +177,15 @@ fn handle_backend_switch_key(app: &mut App, key: &KeyInput) -> InputAction {
                 match app.backend_popup_section() {
                     BackendPopupSection::ActiveBackend => return handle_backend_switch_by_number(app, index),
                     BackendPopupSection::SubagentBackend => {
-                        // Validate index is within bounds
                         if index <= app.backends().len() {
                             app.request_set_subagent_backend(index - 1);
+                            app.close_popup();
+                        }
+                        return InputAction::None;
+                    }
+                    BackendPopupSection::TeammateBackend => {
+                        if index <= app.backends().len() {
+                            app.request_set_teammate_backend(index - 1);
                             app.close_popup();
                         }
                         return InputAction::None;
@@ -246,6 +262,22 @@ fn handle_subagent_backend_enter(app: &mut App) -> InputAction {
         let backend_index = sel - 1;
         if backend_index < app.backends().len() {
             app.request_set_subagent_backend(backend_index);
+            app.close_popup();
+        }
+    }
+    InputAction::None
+}
+
+fn handle_teammate_backend_enter(app: &mut App) -> InputAction {
+    let sel = app.teammate_selection();
+    if sel == 0 {
+        // "Disabled" — clear teammate backend
+        app.request_clear_teammate_backend();
+        app.close_popup();
+    } else {
+        let backend_index = sel - 1;
+        if backend_index < app.backends().len() {
+            app.request_set_teammate_backend(backend_index);
             app.close_popup();
         }
     }

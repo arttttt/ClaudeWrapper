@@ -27,6 +27,7 @@ pub enum BackendPopupSection {
     #[default]
     ActiveBackend,
     SubagentBackend,
+    TeammateBackend,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +40,7 @@ pub enum Focus {
 pub enum UiCommand {
     SwitchBackend { backend_id: String },
     SetSubagentBackend { backend_id: Option<String> },
+    SetTeammateBackend { backend_id: Option<String> },
     RestartClaude,
     RefreshStatus,
     RefreshMetrics { backend_id: Option<String> },
@@ -100,6 +102,10 @@ pub struct App {
     subagent_selection: usize,
     /// Current subagent backend (runtime state, from config on start).
     subagent_backend: Option<String>,
+    /// Selection index for teammate backend list.
+    teammate_selection: usize,
+    /// Current teammate backend (runtime state, from config on start).
+    teammate_backend: Option<String>,
 }
 
 impl App {
@@ -113,6 +119,11 @@ impl App {
         let subagent_backend = config.get().agents
             .as_ref()
             .and_then(|at| at.subagent_backend.clone());
+
+        // Initialize teammate_backend from config
+        let teammate_backend = config.get().agents
+            .as_ref()
+            .map(|at| at.teammate_backend.clone());
 
         Self {
             should_quit: false,
@@ -141,6 +152,8 @@ impl App {
             backend_popup_section: BackendPopupSection::default(),
             subagent_selection: 0,
             subagent_backend,
+            teammate_selection: 0,
+            teammate_backend,
         }
     }
 
@@ -678,6 +691,7 @@ impl App {
         self.backend_selection = self.active_backend_index().unwrap_or(0);
         self.backend_popup_section = BackendPopupSection::ActiveBackend;
         self.reset_subagent_selection();
+        self.reset_teammate_selection();
     }
 
     fn clamp_backend_selection(&mut self) {
@@ -697,11 +711,12 @@ impl App {
 
     // --- Subagent Backend Methods ---
 
-    /// Toggle between ActiveBackend and SubagentBackend sections in popup.
+    /// Cycle through ActiveBackend → SubagentBackend → TeammateBackend sections.
     pub fn toggle_backend_popup_section(&mut self) {
         self.backend_popup_section = match self.backend_popup_section {
             BackendPopupSection::ActiveBackend => BackendPopupSection::SubagentBackend,
-            BackendPopupSection::SubagentBackend => BackendPopupSection::ActiveBackend,
+            BackendPopupSection::SubagentBackend => BackendPopupSection::TeammateBackend,
+            BackendPopupSection::TeammateBackend => BackendPopupSection::ActiveBackend,
         };
     }
 
@@ -755,6 +770,58 @@ impl App {
     /// Index 0 = "Disabled", 1..N = backends.
     fn reset_subagent_selection(&mut self) {
         self.subagent_selection = self.subagent_backend
+            .as_ref()
+            .and_then(|name| self.backends.iter().position(|b| &b.id == name))
+            .map(|idx| idx + 1) // offset: 0=Disabled, 1..N=backends
+            .unwrap_or(0);
+    }
+
+    // --- Teammate Backend Methods ---
+
+    /// Get teammate selection index.
+    pub fn teammate_selection(&self) -> usize {
+        self.teammate_selection
+    }
+
+    /// Move teammate selection by delta (-1 for up, 1 for down).
+    /// Index 0 = "Disabled", 1..N = backends.
+    pub fn move_teammate_selection(&mut self, direction: i32) {
+        let total = self.backends.len() + 1; // +1 for "Disabled"
+        let current = self.teammate_selection.min(total.saturating_sub(1));
+        let next = if direction.is_negative() {
+            if current == 0 { total - 1 } else { current - 1 }
+        } else if current + 1 >= total {
+            0
+        } else {
+            current + 1
+        };
+        self.teammate_selection = next;
+    }
+
+    /// Request to set teammate backend by index.
+    pub fn request_set_teammate_backend(&mut self, index: usize) {
+        let backend_id = self.backends.get(index).map(|b| b.id.clone());
+        self.send_command(UiCommand::SetTeammateBackend { backend_id });
+    }
+
+    /// Clear teammate backend (set to None).
+    pub fn request_clear_teammate_backend(&mut self) {
+        self.send_command(UiCommand::SetTeammateBackend { backend_id: None });
+    }
+
+    /// Set teammate backend from UI command handler.
+    pub fn set_teammate_backend(&mut self, backend_id: Option<String>) {
+        self.teammate_backend = backend_id;
+    }
+
+    /// Get current teammate backend.
+    pub fn teammate_backend(&self) -> Option<&str> {
+        self.teammate_backend.as_deref()
+    }
+
+    /// Reset teammate selection to match current teammate_backend.
+    fn reset_teammate_selection(&mut self) {
+        self.teammate_selection = self.teammate_backend
             .as_ref()
             .and_then(|name| self.backends.iter().position(|b| &b.id == name))
             .map(|idx| idx + 1) // offset: 0=Disabled, 1..N=backends

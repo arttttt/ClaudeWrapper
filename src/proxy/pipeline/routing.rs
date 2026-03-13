@@ -9,7 +9,7 @@
 
 use serde_json::Value;
 
-use crate::backend::{BackendState, SubagentRegistry};
+use crate::backend::{BackendState, AgentRegistry};
 use crate::config::Backend;
 use crate::metrics::{BackendOverride, RoutingDecision};
 use crate::proxy::error::ProxyError;
@@ -28,7 +28,7 @@ pub fn resolve_backend(
     backend_override: Option<String>,
     plugin_override: Option<BackendOverride>,
     parsed_body: Option<&Value>,
-    registry: &SubagentRegistry,
+    registry: &AgentRegistry,
     ctx: &mut PipelineContext,
 ) -> Result<Backend, ProxyError> {
     // Resolve with documented priority.
@@ -135,9 +135,9 @@ fn parse_marker_in_hook_context(s: &str) -> Option<String> {
 
 /// Parse `⟨AC:{id}⟩` from a string slice.
 fn parse_marker(s: &str) -> Option<String> {
-    let start = s.find(SubagentRegistry::MARKER_PREFIX)?;
-    let rest = &s[start + SubagentRegistry::MARKER_PREFIX.len()..];
-    let end = rest.find(SubagentRegistry::MARKER_SUFFIX)?;
+    let start = s.find(AgentRegistry::MARKER_PREFIX)?;
+    let rest = &s[start + AgentRegistry::MARKER_PREFIX.len()..];
+    let end = rest.find(AgentRegistry::MARKER_SUFFIX)?;
     let id = &rest[..end];
     if !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-' || c == '_') {
         Some(id.to_string())
